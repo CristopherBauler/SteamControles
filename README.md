@@ -39,6 +39,7 @@ O `config.json` fica só na sua máquina (está no `.gitignore`). Copie o exempl
 | `vaultPath` | Pasta do vault do Obsidian (vazio = pasta acima deste projeto) |
 | `projectFolder` | Subpasta deste projeto dentro do vault (`Steam`) |
 | `itadApiKey` | Opcional: chave [IsThereAnyDeal](https://isthereanydeal.com/) para preços de Nuuvem / GMG / Fanatical |
+| `steamWebApiKey` | Opcional: chave da [Steam Web API](https://steamcommunity.com/dev/apikey) para horas da biblioteca se o XML público falhar |
 
 A lista **precisa estar pública**. Sem isso a Steam devolve lista vazia.
 
@@ -52,6 +53,8 @@ Não tem SteamID no repositório. Cada clone faz o login local:
 4. O SteamID é gravado no **seu** `config.json`
 
 A lista de desejos precisa estar **pública**: Perfil Steam → Privacidade → Lista de desejos. Sem isso a API da Valve não entrega os jogos, mesmo depois do login. Isso não deixa o perfil inteiro público.
+
+Para o **backlog** (biblioteca inteira), o perfil precisa de **Detalhes dos jogos = Público**. Wishlist pública não basta. Sem isso o script tenta ler as horas do Steam instalado neste Windows.
 
 ## Uso
 
@@ -83,12 +86,21 @@ O Agendador chama `npm run update:daily`, que **não** baixa de novo se já atua
 
 Jogos saídos da wishlist **não perdem histórico**; a nota fica com `on_wishlist: false` e some das tabelas principais.
 
+## Backlog (zerar o que você comprou)
+
+Nota `Backlog Steam.md`: a **biblioteca inteira** ainda não marcada. Marque a caixa e clique **Atualizar** para mandar o jogo para `Não vou jogar.md` (lista cinza). Desmarcar lá e Atualizar devolve ao Backlog. **Atualizar** só adiciona compras novas; nada some por horas jogadas.
+
+O botão **Atualizar** da wishlist também reconstrói os dois painéis. `npm run panel` usa o cache `Data/ownedPlaytimes.json` se a rede falhar.
+
+Ative os snippets **game-backlog-dashboard** e **game-backlog-skipped** em Ajustes → Aparência → Snippets CSS. Copie `Snippets/*.css` para `.obsidian/snippets/` se o visual não aparecer.
+
 ## Estrutura
 
 ```
 config.json
 package.json
 Scripts/updateWishlist.js    ponto de entrada
+Scripts/backlog.js
 Scripts/steamApi.js
 Scripts/historyManager.js
 Scripts/stores.js
@@ -97,8 +109,13 @@ Scripts/config.js
 Scripts/installScheduler.ps1
 Data/wishlist.json
 Data/priceHistory.json
+Data/ownedPlaytimes.json
+Data/backlogDone.json
+Data/backlogTracked.json
 Games/                       notas geradas
 Dashboard/Steam Wishlist Dashboard.md
+Dashboard/Backlog Steam.md
+Backlog Steam.md
 ```
 
 ## Cores
@@ -131,7 +148,7 @@ Ainda assim **não publique dados pessoais**:
 - `Data/` — wishlist, histórico de preços, jogos da biblioteca
 - `Games/` e `Minha Wishlist Steam.md` — suas notas
 
-O `.gitignore` já ignora isso. Use `config.example.json` como modelo. Copie o CSS `game-wishlist-dashboard.css` para `.obsidian/snippets/` no vault.
+O `.gitignore` já ignora isso. Use `config.example.json` como modelo. Copie o CSS `game-wishlist-dashboard.css` e `game-backlog-dashboard.css` para `.obsidian/snippets/` no vault.
 
 O SteamID64 de um perfil **público** já aparece na URL da Steam; sozinho não abre a conta. Se a wishlist for pública, a lista de jogos também já é visível na Steam.
 

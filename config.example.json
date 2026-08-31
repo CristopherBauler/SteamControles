@@ -9,5 +9,6 @@
   "vaultPath": "",
   "projectFolder": "Steam",
   "requestDelayMs": 1000,
-  "itadApiKey": ""
+  "itadApiKey": "",
+  "steamWebApiKey": ""
 }

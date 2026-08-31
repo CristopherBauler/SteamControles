@@ -18,7 +18,8 @@ const {
   formatBRL,
   paint,
 } = require("./config");
-const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedGames, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError } = require("./steamApi");
+const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedPlaytimes, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError } = require("./steamApi");
+const { refreshBacklog } = require("./backlog");
 const { fetchGgDealsPopular } = require("./ggDeals");
 const { loadHistory, saveHistory, migrateLegacyIfNeeded, appendDaily, summarize, colorStatus, ensureBasePrice } = require("./historyManager");
 const { fetchItadPrices } = require("./stores");
@@ -89,7 +90,6 @@ function isBareSteamHeader(url) {
 
 function priceUnchanged(saved, price) {
   if (!saved?.name || !saved.headerImage) return false;
-  if (isBareSteamHeader(saved.headerImage)) return false;
   if (price?.unavailable && saved.currentPrice != null) return true;
   if (price?.currentPrice == null && saved.currentPrice != null) return true;
   return (
@@ -153,6 +153,7 @@ async function main() {
   let source = "local";
   let ownedIds = new Set();
   let ownedPrivate = true;
+  let ownedPayload = null;
   let mostWanted = [];
   let ggPopular = [];
   let storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [] };
@@ -164,14 +165,17 @@ async function main() {
     source = "steam";
     console.log(paint("cyan", `Wishlist pública: ${wishlistItems.length} jogos`));
     try {
-      const owned = await fetchOwnedGames(steamId64);
-      ownedIds = owned.ids;
-      ownedPrivate = owned.privateProfile;
-      console.log(
-        ownedPrivate
-          ? paint("yellow", "Biblioteca privada — não dá para marcar Comprado. Deixe Detalhes dos jogos públicos.")
-          : paint("dim", `Biblioteca: ${ownedIds.size} jogos`)
-      );
+      const owned = await fetchOwnedPlaytimes(steamId64, { apiKey: config.steamWebApiKey });
+      ownedPayload = owned;
+      ownedIds = new Set((owned.games || []).map((game) => game.appId));
+      ownedPrivate = ownedIds.size === 0;
+      if (owned.source === "local") {
+        console.log(paint("yellow", `Biblioteca via Steam local: ${ownedIds.size} jogos (Detalhes dos jogos ainda privado).`));
+      } else if (ownedPrivate) {
+        console.log(paint("yellow", "Biblioteca privada — não dá para marcar Comprado. Deixe Detalhes dos jogos públicos."));
+      } else {
+        console.log(paint("dim", `Biblioteca: ${ownedIds.size} jogos`));
+      }
     } catch (error) {
       console.log(paint("yellow", `Biblioteca: ${error.message}`));
     }
@@ -301,8 +305,16 @@ async function main() {
       storeHub,
       updatedAt: stamp,
     });
+    const backlog = await refreshBacklog({ config, steamId64, ownedPayload });
     const wishCount = gamesFromNotes.filter((game) => game.onWishlist).length;
     console.log(paint("green", `Painel redesenhado com ${wishCount} jogos (sem reconsultar cada preço).`));
+    console.log(
+      paint(
+        "green",
+        `Backlog: ${backlog.open.length} na lista · Não vou jogar: ${backlog.done.length}` +
+          (backlog.payload?.source === "local" ? " (horas do Steam local)" : "")
+      )
+    );
     return;
   }
 
@@ -328,17 +340,39 @@ async function main() {
   let changed = 0;
   let recovered429 = 0;
 
-  const PRICE_CONCURRENCY = 3;
+  const PRICE_CONCURRENCY = 7;
+  const STEAM_429_TRIP = 4;
+  const steamLimit = { hits: 0, tripped: false, logged: false };
+  function noteSteam429() {
+    steamLimit.hits += 1;
+    if (steamLimit.hits >= STEAM_429_TRIP) steamLimit.tripped = true;
+  }
+  function logSteamLimitedOnce() {
+    if (!steamLimit.logged && steamLimit.tripped) {
+      steamLimit.logged = true;
+      console.log(paint("yellow", "Steam limitou; resto em cache"));
+    }
+  }
+
   console.log(paint("dim", `Checando ${wishlistItems.length} preços em paralelo...`));
   const priceHits = await mapPool(wishlistItems, PRICE_CONCURRENCY, async (item) => {
+    if (steamLimit.tripped) {
+      logSteamLimitedOnce();
+      return { appId: item.appId, unavailable: true, rateLimited: true };
+    }
     try {
       return await fetchPriceOverview(item.appId, config);
     } catch (error) {
+      const limited = isRateLimitError(error);
+      if (limited) {
+        noteSteam429();
+        logSteamLimitedOnce();
+      }
       return {
         appId: item.appId,
         error: error.message,
         unavailable: true,
-        rateLimited: isRateLimitError(error),
+        rateLimited: limited,
       };
     }
   });
@@ -364,6 +398,7 @@ async function main() {
       };
       let reuse = priceUnchanged(saved, price);
       let from429 = false;
+      let headerUpgraded = false;
       const known = hasSavedNote(saved);
       const price429 = priceLookedRateLimited(price);
 
@@ -376,10 +411,37 @@ async function main() {
         details = detailsFromSaved(item, saved, from429 ? { unavailable: true } : price);
         skipped += 1;
         if (from429) recovered429 += 1;
+
+        if (
+          !from429 &&
+          !steamLimit.tripped &&
+          isBareSteamHeader(details.headerImage)
+        ) {
+          try {
+            const fresh = await fetchAppDetails(item.appId, config);
+            if (fresh?.headerImage) {
+              details.headerImage = fresh.headerImage;
+              details.capsuleImage = fresh.capsuleImage || fresh.headerImage;
+              headerUpgraded = true;
+            }
+          } catch (error) {
+            if (isRateLimitError(error)) {
+              noteSteam429();
+              logSteamLimitedOnce();
+            }
+          }
+        }
+      } else if (steamLimit.tripped && known) {
+        details = detailsFromSaved(item, saved, price);
+        skipped += 1;
       } else {
         try {
           details = await fetchAppDetails(item.appId, config);
         } catch (error) {
+          if (isRateLimitError(error)) {
+            noteSteam429();
+            logSteamLimitedOnce();
+          }
           if (!known) throw error;
           details = detailsFromSaved(item, saved, { unavailable: true });
           reuse = true;
@@ -434,7 +496,7 @@ async function main() {
       };
 
       const existing = existingNotes.get(item.appId);
-      if (!reuse) {
+      if (!reuse || headerUpgraded) {
         await writeGameNote(
           paths.games,
           buildNote(game, {
@@ -549,6 +611,7 @@ async function main() {
   });
   await writeJson(paths.storeHub, { updatedAt, ...storeHub });
   await writeDashboard(gamesOut, config, { mostWanted, ggPopular, ownedPrivate, storeHub, updatedAt });
+  const backlog = await refreshBacklog({ config, steamId64, ownedPayload });
 
   console.log("");
   console.log(
@@ -556,6 +619,12 @@ async function main() {
       "cyan",
       `Atualizados: ${ok}  |  Iguais (cache): ${skipped}  |  Mudou/novo: ${changed}  |  Falhas: ${failed}` +
         (recovered429 ? `  |  429 recuperados do cache: ${recovered429}` : "")
+    )
+  );
+  console.log(
+    paint(
+      "green",
+      `Backlog: ${backlog.open.length} na lista · Não vou jogar: ${backlog.done.length}`
     )
   );
 }

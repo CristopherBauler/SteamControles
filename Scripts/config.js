@@ -48,6 +48,7 @@ async function loadConfig() {
     projectFolder: config.projectFolder || path.basename(base),
     requestDelayMs: Number(config.requestDelayMs) > 0 ? Number(config.requestDelayMs) : 1000,
     itadApiKey: String(config.itadApiKey || "").trim(),
+    steamWebApiKey: String(config.steamWebApiKey || "").trim(),
     paths: {
       root: base,
       config: CONFIG_PATH,
@@ -62,7 +63,12 @@ async function loadConfig() {
       mostWanted: path.join(base, "Data", "mostWanted.json"),
       ggPopular: path.join(base, "Data", "ggPopular.json"),
       storeHub: path.join(base, "Data", "storeHub.json"),
+      ownedPlaytimes: path.join(base, "Data", "ownedPlaytimes.json"),
+      backlogDone: path.join(base, "Data", "backlogDone.json"),
+      backlogTracked: path.join(base, "Data", "backlogTracked.json"),
       dashboardNote: path.join(base, "Dashboard", "Steam Wishlist Dashboard.md"),
+      backlogNote: path.join(base, "Dashboard", "Backlog Steam.md"),
+      skippedNote: path.join(base, "Dashboard", "Não vou jogar.md"),
     },
   };
 }

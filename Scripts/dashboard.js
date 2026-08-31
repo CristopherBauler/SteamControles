@@ -235,6 +235,8 @@ tags:
     <div class="gwd-title">🎮 Minha Wishlist Steam</div>
     <div class="gwd-actions">
       <span class="gwd-pill">${esc(badgeText(updatedAt, timezone))}</span>
+      <a class="gwd-nav" href="obsidian://open?file=Backlog%20Steam">Backlog</a>
+      <a class="gwd-nav" href="obsidian://open?file=N%C3%A3o%20vou%20jogar">Não vou jogar</a>
       <a class="gwd-update" href="steamwish://update">Atualizar</a>
     </div>
   </div>

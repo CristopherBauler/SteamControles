@@ -76,7 +76,7 @@ const server = http.createServer(async (req, res) => {
     res.end(
       html(
         "Atualizado",
-        `<h1>Atualizado</h1><p>Volte ao Obsidian e recarregue a nota <b>Minha Wishlist Steam</b> (Ctrl+R).</p>`
+        `<h1>Atualizado</h1><p>Volte ao Obsidian e recarregue <b>Minha Wishlist Steam</b>, <b>Backlog Steam</b> ou <b>Não vou jogar</b> (Ctrl+R).</p>`
       )
     );
   } catch (error) {

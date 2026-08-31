@@ -3,6 +3,8 @@
  * Wishlist precisa estar pública no perfil.
  */
 
+const path = require("path");
+const fs = require("fs/promises");
 const { centsToReais, sleep } = require("./config");
 
 const STEAM_HEADERS = {
@@ -23,18 +25,19 @@ const REVIEW_LABELS = {
   "Overwhelmingly Negative": "Extremamente negativas",
 };
 
-const RATE_LIMIT_BACKOFF_MS = [3000, 8000, 15000];
+const SHORT_RETRY_MS = 1500;
+const SHORT_RETRY_AFTER_CAP_MS = 2000;
 
 function parseRetryAfterMs(header) {
   if (!header) return null;
   const trimmed = String(header).trim();
   const seconds = Number(trimmed);
   if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.min(seconds * 1000, 60_000);
+    return Math.min(seconds * 1000, SHORT_RETRY_AFTER_CAP_MS);
   }
   const when = Date.parse(trimmed);
   if (Number.isNaN(when)) return null;
-  return Math.min(Math.max(0, when - Date.now()), 60_000);
+  return Math.min(Math.max(0, when - Date.now()), SHORT_RETRY_AFTER_CAP_MS);
 }
 
 function isRateLimitError(error) {
@@ -49,14 +52,12 @@ function httpError(status, retryAfterMs) {
   return error;
 }
 
-async function fetchJson(url, { retries = 3, timeoutMs = 25000 } = {}) {
+async function fetchJson(url, { retries = 1, timeoutMs = 25000 } = {}) {
+  const extraRetries = Math.max(0, Number(retries) || 0);
+  const maxAttempts = extraRetries + 1;
   let lastError;
-  let rateLimitHits = 0;
-  const maxAttempts = Math.max(retries, 1);
-  let attempt = 0;
 
-  while (true) {
-    attempt += 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const response = await fetch(url, {
         headers: STEAM_HEADERS,
@@ -75,22 +76,10 @@ async function fetchJson(url, { retries = 3, timeoutMs = 25000 } = {}) {
       return await response.json();
     } catch (error) {
       lastError = error;
+      if (attempt >= maxAttempts) break;
       const is429 = error.status === 429 || isRateLimitError(error);
-
-      if (is429) {
-        rateLimitHits += 1;
-        if (rateLimitHits > RATE_LIMIT_BACKOFF_MS.length) break;
-        const scheduled = RATE_LIMIT_BACKOFF_MS[rateLimitHits - 1];
-        const waitMs = error.retryAfterMs > 0 ? error.retryAfterMs : scheduled;
-        await sleep(waitMs);
-        continue;
-      }
-
-      if (attempt < maxAttempts) {
-        await sleep(1500 * attempt);
-        continue;
-      }
-      break;
+      const waitMs = is429 && error.retryAfterMs > 0 ? error.retryAfterMs : SHORT_RETRY_MS;
+      await sleep(waitMs);
     }
   }
   throw lastError;
@@ -217,13 +206,13 @@ function parseAppDetails(appId, data) {
   };
 }
 
-async function fetchAppDetails(appId, { country, language }) {
+async function fetchAppDetails(appId, { country, language, retries = 0, timeoutMs = 8000 } = {}) {
   const url = new URL("https://store.steampowered.com/api/appdetails");
   url.searchParams.set("appids", String(appId));
   url.searchParams.set("cc", country);
   url.searchParams.set("l", language);
 
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(url, { retries, timeoutMs });
   const entry = payload?.[String(appId)];
   if (!entry?.success || !entry.data) {
     return {
@@ -256,7 +245,7 @@ async function fetchPriceOverview(appId, { country, language }) {
   url.searchParams.set("l", language);
   url.searchParams.set("filters", "price_overview");
 
-  const payload = await fetchJson(url, { retries: 1, timeoutMs: 12000 });
+  const payload = await fetchJson(url, { retries: 0, timeoutMs: 8000 });
   const entry = payload?.[String(appId)];
   const data = entry?.data || {};
   const overview = data.price_overview;
@@ -297,18 +286,388 @@ async function fetchReviews(appId) {
   }
 }
 
-async function fetchOwnedGames(steamId64) {
+function parseHoursValue(value) {
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  if (text.includes(",") && text.includes(".")) return Number(text.replace(/,/g, "")) || 0;
+  if (text.includes(",") && !text.includes(".")) return Number(text.replace(",", ".")) || 0;
+  return Number(text) || 0;
+}
+
+function xmlTag(block, tag) {
+  const cdata = block.match(new RegExp(`<${tag}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]>`, "i"));
+  if (cdata) return decodeHtml(cdata[1]);
+  const plain = block.match(new RegExp(`<${tag}>([^<]*)</${tag}>`, "i"));
+  return decodeHtml(plain?.[1] || "");
+}
+
+function communityLogoUrl(appId, hash) {
+  if (!hash) return "";
+  return `https://media.steampowered.com/steamcommunity/public/images/apps/${appId}/${hash}.jpg`;
+}
+
+function parseOwnedGamesXml(xml) {
+  const text = String(xml || "");
+  if (!text.includes("<appID>")) {
+    return { games: [], privateProfile: true };
+  }
+  const games = [];
+  const seen = new Set();
+  for (const chunk of text.split(/<game>/i).slice(1)) {
+    const appId = Number(xmlTag(chunk, "appID"));
+    if (!Number.isInteger(appId) || appId <= 0 || seen.has(appId)) continue;
+    seen.add(appId);
+    const hours = parseHoursValue(xmlTag(chunk, "hoursOnRecord"));
+    games.push({
+      appId,
+      name: xmlTag(chunk, "name") || `App ${appId}`,
+      logo: xmlTag(chunk, "logo"),
+      hours,
+      playtimeMinutes: Math.round(hours * 60),
+    });
+  }
+  return { games, privateProfile: false };
+}
+
+async function fetchOwnedGamesFromXml(steamId64) {
   const xml = await fetchJson(
     `https://steamcommunity.com/profiles/${steamId64}/games?tab=all&xml=1`
   );
-  const text = String(xml || "");
-  if (!text.includes("<appID>")) {
-    return { ids: new Set(), privateProfile: true };
+  return parseOwnedGamesXml(xml);
+}
+
+async function fetchOwnedGamesFromApi(steamId64, apiKey) {
+  const url = new URL("https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/");
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("steamid", String(steamId64));
+  url.searchParams.set("include_appinfo", "1");
+  url.searchParams.set("include_played_free_games", "1");
+  url.searchParams.set("format", "json");
+  const payload = await fetchJson(url);
+  const list = payload?.response?.games;
+  if (!Array.isArray(list) || !list.length) {
+    return { games: [], privateProfile: true };
   }
-  const ids = new Set(
-    [...text.matchAll(/<appID>(\d+)<\/appID>/gi)].map((match) => Number(match[1]))
-  );
-  return { ids, privateProfile: false };
+  const games = list
+    .map((item) => {
+      const appId = Number(item.appid);
+      const minutes = Number(item.playtime_forever || 0);
+      return {
+        appId,
+        name: item.name || `App ${appId}`,
+        logo: communityLogoUrl(appId, item.img_logo_url),
+        hours: minutes / 60,
+        playtimeMinutes: minutes,
+      };
+    })
+    .filter((game) => Number.isInteger(game.appId) && game.appId > 0);
+  return { games, privateProfile: false };
+}
+
+function steamId64ToAccountId(steamId64) {
+  return (BigInt(String(steamId64)) - 76561197960265728n).toString();
+}
+
+function extractBraceBody(text, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < text.length; i += 1) {
+    if (text[i] === "{") depth += 1;
+    else if (text[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return { body: text.slice(openIdx + 1, i), end: i };
+    }
+  }
+  return { body: text.slice(openIdx + 1), end: text.length };
+}
+
+function walkNumericBlocks(body) {
+  const blocks = [];
+  const re = /"(\d+)"\s*\{/g;
+  let match;
+  while ((match = re.exec(body))) {
+    const brace = body.indexOf("{", match.index + match[0].length - 1);
+    if (brace < 0) break;
+    const extracted = extractBraceBody(body, brace);
+    blocks.push({ id: Number(match[1]), inner: extracted.body });
+    re.lastIndex = extracted.end + 1;
+  }
+  return blocks;
+}
+
+function parseLocalConfigPlaytimes(vdfText) {
+  const text = String(vdfText || "");
+  const appsAt = text.search(/"apps"\s*\{/i);
+  if (appsAt < 0) return [];
+  const brace = text.indexOf("{", appsAt);
+  const { body } = extractBraceBody(text, brace);
+  return walkNumericBlocks(body).map(({ id, inner }) => {
+    const play = inner.match(/"Playtime"\s+"(\d+)"/i);
+    const last = inner.match(/"LastPlayed"\s+"(\d+)"/i);
+    const minutes = play ? Number(play[1]) : 0;
+    return {
+      appId: id,
+      playtimeMinutes: minutes,
+      hours: minutes / 60,
+      lastPlayed: last ? Number(last[1]) : 0,
+    };
+  });
+}
+
+function parseAppManifestName(text) {
+  const name = String(text || "").match(/"name"\s+"([^"]+)"/i);
+  const appId = String(text || "").match(/"appid"\s+"(\d+)"/i);
+  if (!appId) return null;
+  return { appId: Number(appId[1]), name: name?.[1] || `App ${appId[1]}` };
+}
+
+function readCString(buf, offset, end) {
+  let stop = offset;
+  const limit = end == null ? buf.length : end;
+  while (stop < limit && buf[stop] !== 0) stop += 1;
+  return { value: buf.toString("utf8", offset, stop), next: stop + 1 };
+}
+
+function loadAppInfoStringTable(buf) {
+  const magic = buf.readUInt32LE(0);
+  if (magic !== 0x07564429) return null;
+  const tableOff = Number(buf.readBigUInt64LE(8));
+  if (tableOff < 16 || tableOff >= buf.length) return null;
+  const count = buf.readUInt32LE(tableOff);
+  const strings = [];
+  let offset = tableOff + 4;
+  for (let i = 0; i < count && offset < buf.length; i += 1) {
+    const read = readCString(buf, offset);
+    strings.push(read.value);
+    offset = read.next;
+  }
+  return { strings, dataStart: 16, dataEnd: tableOff };
+}
+
+function nameFromAppInfoBlob(buf, start, end, strings) {
+  let offset = start;
+  let depth = 0;
+  let inCommon = false;
+  let commonDepth = 0;
+  let name = "";
+  let appType = "";
+
+  while (offset < end) {
+    const type = buf[offset];
+    offset += 1;
+    if (type === 0x08) {
+      if (inCommon && depth === commonDepth) inCommon = false;
+      depth -= 1;
+      if (depth < 0) break;
+      continue;
+    }
+    if (offset + 4 > end) break;
+    const key = strings[buf.readUInt32LE(offset)] || "";
+    offset += 4;
+    if (type === 0x00) {
+      depth += 1;
+      if (key === "common") {
+        inCommon = true;
+        commonDepth = depth;
+      }
+    } else if (type === 0x01) {
+      const read = readCString(buf, offset, end);
+      offset = read.next;
+      if (inCommon && depth === commonDepth) {
+        if (key === "name" && !name) name = read.value;
+        if (key === "type" && !appType) appType = read.value;
+      }
+    } else if (type === 0x02 || type === 0x03 || type === 0x04 || type === 0x06) {
+      offset += 4;
+    } else if (type === 0x07 || type === 0x0a) {
+      offset += 8;
+    } else if (type === 0x05) {
+      while (offset + 1 < end && !(buf[offset] === 0 && buf[offset + 1] === 0)) offset += 2;
+      offset += 2;
+    } else {
+      break;
+    }
+    if (name && appType && !inCommon) break;
+  }
+  return { name, appType };
+}
+
+function parseAppInfoNames(buf, wantedIds) {
+  const table = loadAppInfoStringTable(buf);
+  if (!table) return new Map();
+  const names = new Map();
+  const want = wantedIds instanceof Set ? wantedIds : null;
+  let offset = table.dataStart;
+  while (offset + 8 <= table.dataEnd) {
+    const appId = buf.readUInt32LE(offset);
+    const size = buf.readUInt32LE(offset + 4);
+    offset += 8;
+    if (appId === 0) break;
+    if (size < 60 || offset + size > table.dataEnd) break;
+    const blobStart = offset + 60;
+    const blobEnd = offset + size;
+    offset = blobEnd;
+    if (want && !want.has(appId)) continue;
+    const info = nameFromAppInfoBlob(buf, blobStart, blobEnd, table.strings);
+    if (info.name) names.set(appId, { name: info.name, appType: info.appType || "" });
+  }
+  return names;
+}
+
+function defaultSteamRoots() {
+  const roots = [];
+  if (process.env["ProgramFiles(x86)"]) {
+    roots.push(pathJoin(process.env["ProgramFiles(x86)"], "Steam"));
+  }
+  if (process.env.ProgramFiles) {
+    roots.push(pathJoin(process.env.ProgramFiles, "Steam"));
+  }
+  roots.push("C:\\Program Files (x86)\\Steam");
+  return [...new Set(roots)];
+}
+
+function pathJoin(...parts) {
+  return path.join(...parts);
+}
+
+async function readSteamFile(filePath) {
+  try {
+    return await fs.readFile(filePath);
+  } catch {
+    return null;
+  }
+}
+
+async function readSteamText(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function parseLibraryFolderPaths(vdfText) {
+  const paths = [];
+  const re = /"path"\s+"([^"]+)"/gi;
+  let match;
+  while ((match = re.exec(String(vdfText || "")))) {
+    paths.push(match[1].replace(/\\\\/g, "\\"));
+  }
+  return paths;
+}
+
+async function collectAppManifestNames(steamRoot) {
+  const names = new Map();
+  const libraries = [steamRoot];
+  const foldersText = await readSteamText(path.join(steamRoot, "steamapps", "libraryfolders.vdf"));
+  for (const folder of parseLibraryFolderPaths(foldersText)) {
+    if (folder && !libraries.includes(folder)) libraries.push(folder);
+  }
+  for (const library of libraries) {
+    const appsDir = path.join(library, "steamapps");
+    let files = [];
+    try {
+      files = await fs.readdir(appsDir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!/^appmanifest_\d+\.acf$/i.test(file)) continue;
+      const parsed = parseAppManifestName(await readSteamText(path.join(appsDir, file)));
+      if (parsed?.appId) names.set(parsed.appId, parsed.name);
+    }
+  }
+  return names;
+}
+
+async function fetchOwnedGamesFromLocal(steamId64) {
+  const accountId = steamId64ToAccountId(steamId64);
+  let steamRoot = "";
+  let vdfText = "";
+  for (const root of defaultSteamRoots()) {
+    const candidate = path.join(root, "userdata", accountId, "config", "localconfig.vdf");
+    vdfText = await readSteamText(candidate);
+    if (vdfText) {
+      steamRoot = root;
+      break;
+    }
+  }
+  if (!vdfText) {
+    return { games: [], privateProfile: true, localAvailable: false };
+  }
+
+  const playtimes = parseLocalConfigPlaytimes(vdfText);
+  const manifestNames = await collectAppManifestNames(steamRoot);
+  const meta = new Map();
+  const appinfoBuf = await readSteamFile(path.join(steamRoot, "appcache", "appinfo.vdf"));
+  if (appinfoBuf) {
+    const fromInfo = parseAppInfoNames(appinfoBuf, new Set(playtimes.map((item) => item.appId)));
+    for (const [appId, info] of fromInfo) meta.set(appId, info);
+  }
+
+  const games = playtimes
+    .filter((item) => Number.isInteger(item.appId) && item.appId > 0)
+    .map((item) => {
+      const info = meta.get(item.appId);
+      return {
+        appId: item.appId,
+        name: info?.name || manifestNames.get(item.appId) || `App ${item.appId}`,
+        logo: "",
+        hours: item.hours,
+        playtimeMinutes: item.playtimeMinutes,
+        appType: info?.appType || "",
+      };
+    });
+
+  return { games, privateProfile: true, localAvailable: true };
+}
+
+async function fetchOwnedPlaytimes(steamId64, { apiKey } = {}) {
+  try {
+    const xml = await fetchOwnedGamesFromXml(steamId64);
+    if (xml.games.length) {
+      return { ...xml, source: "xml", communityPrivate: false };
+    }
+  } catch {
+    // perfil privado, sign-in wall ou XML vazio
+  }
+
+  if (apiKey) {
+    try {
+      const api = await fetchOwnedGamesFromApi(steamId64, apiKey);
+      if (api.games.length) {
+        return { ...api, source: "api", communityPrivate: false };
+      }
+    } catch {
+      // chave inválida ou perfil ainda privado
+    }
+  }
+
+  const local = await fetchOwnedGamesFromLocal(steamId64);
+  if (local.games.length) {
+    return {
+      games: local.games,
+      source: "local",
+      communityPrivate: true,
+      localAvailable: true,
+    };
+  }
+
+  return {
+    games: [],
+    source: "none",
+    communityPrivate: true,
+    localAvailable: Boolean(local.localAvailable),
+  };
+}
+
+async function fetchOwnedGames(steamId64) {
+  const owned = await fetchOwnedPlaytimes(steamId64);
+  return {
+    ids: new Set(owned.games.map((game) => game.appId)),
+    privateProfile: owned.communityPrivate && owned.source !== "local",
+    games: owned.games,
+    source: owned.source,
+  };
 }
 
 function decodeHtml(text) {
@@ -544,6 +903,7 @@ module.exports = {
   fetchPriceOverview,
   fetchReviews,
   fetchOwnedGames,
+  fetchOwnedPlaytimes,
   fetchMostWanted,
   fetchSpecialsCatalog,
   fetchStoreHub,
