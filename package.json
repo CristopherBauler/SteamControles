@@ -1,0 +1,17 @@
+{
+  "name": "steam-wishlist-dashboard",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Dashboard local da wishlist Steam para Obsidian (preços em BRL).",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "login": "node Scripts/steamLogin.js",
+    "serve": "node Scripts/controlServer.js",
+    "update": "node Scripts/updateWishlist.js",
+    "panel": "node Scripts/updateWishlist.js --panel-only",
+    "update:daily": "node Scripts/updateWishlist.js --daily",
+    "install:scheduler": "powershell -ExecutionPolicy Bypass -File Scripts/installScheduler.ps1"
+  }
+}

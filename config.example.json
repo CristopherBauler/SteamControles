@@ -1,0 +1,13 @@
+{
+  "steamId": "",
+  "profileUrl": "",
+  "currency": "BRL",
+  "country": "br",
+  "language": "portuguese",
+  "timezone": "America/Sao_Paulo",
+  "updateHour": "08:00",
+  "vaultPath": "",
+  "projectFolder": "Steam",
+  "requestDelayMs": 1000,
+  "itadApiKey": ""
+}

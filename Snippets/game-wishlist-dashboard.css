@@ -1,0 +1,354 @@
+/* Minha Wishlist Steam — carrosséis, setas, cards gg.deals */
+
+.game-wishlist-dashboard .markdown-preview-view,
+.game-wishlist-dashboard .markdown-source-view {
+  background-color: #12161d;
+  color: #e8edf4;
+}
+
+.game-wishlist-dashboard .metadata-container,
+.game-wishlist-dashboard .inline-title {
+  display: none;
+}
+
+.game-wishlist-dashboard .gwd-root {
+  font-family: "Segoe UI", Inter, sans-serif;
+  color: #e8edf4;
+  background: #1a1f27;
+  border: 1px solid #2b3240;
+  border-radius: 16px;
+  padding: 16px 18px 20px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.game-wishlist-dashboard .gwd-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.game-wishlist-dashboard .gwd-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #f4f7fb;
+}
+
+.game-wishlist-dashboard .gwd-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.game-wishlist-dashboard .gwd-pill {
+  background: #1f6a43;
+  color: #d8ffe8;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.game-wishlist-dashboard a.gwd-update {
+  background: #2563eb;
+  color: #fff !important;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none !important;
+}
+
+.game-wishlist-dashboard .gwd-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #8b95a7;
+  line-height: 1.45;
+}
+
+.game-wishlist-dashboard .gwd-sechead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 22px 0 10px;
+  gap: 12px;
+}
+
+.game-wishlist-dashboard .gwd-sectitle {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f4f7fb;
+}
+
+.game-wishlist-dashboard .gwd-secextra {
+  font-size: 11px;
+  color: #8b95a7;
+}
+
+.game-wishlist-dashboard .gwd-sort {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.game-wishlist-dashboard a.gwd-sort-btn {
+  background: #2a3344;
+  color: #c5ccd6 !important;
+  text-decoration: none !important;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.game-wishlist-dashboard a.gwd-sort-btn.is-on {
+  background: #2563eb;
+  color: #fff !important;
+}
+
+.game-wishlist-dashboard #gwd-wish-price,
+.game-wishlist-dashboard #gwd-wish-disc {
+  scroll-margin-top: 8px;
+}
+
+.game-wishlist-dashboard #gwd-wish-disc {
+  display: none;
+}
+
+.game-wishlist-dashboard #gwd-wish-disc:target {
+  display: block;
+}
+
+.game-wishlist-dashboard .gwd-root:has(#gwd-wish-disc:target) #gwd-wish-price {
+  display: none;
+}
+
+.game-wishlist-dashboard .gwd-scroller {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px 0 10px;
+}
+
+.game-wishlist-dashboard .gwd-track {
+  display: flex;
+  gap: 12px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.game-wishlist-dashboard a.gwd-card {
+  flex: 0 0 168px;
+  text-decoration: none !important;
+  color: #e8edf4 !important;
+}
+
+.game-wishlist-dashboard .gwd-card-art {
+  position: relative;
+}
+
+.game-wishlist-dashboard .gwd-card-art img {
+  width: 168px;
+  height: 78px;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+  background: #21262d;
+}
+
+.game-wishlist-dashboard .gwd-rank {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  background: #0009;
+  color: #fff;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.game-wishlist-dashboard .gwd-rank-br {
+  top: auto;
+  bottom: 8px;
+}
+
+.game-wishlist-dashboard .gwd-card-name,
+.game-wishlist-dashboard .gwd-gg-name {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+  height: 34px;
+  overflow: hidden;
+}
+
+.game-wishlist-dashboard .gwd-card-price {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.game-wishlist-dashboard a.gwd-gg {
+  flex: 0 0 148px;
+  text-decoration: none !important;
+  color: #e8edf4 !important;
+}
+
+.game-wishlist-dashboard .gwd-gg-art img {
+  width: 148px;
+  height: 196px;
+  object-fit: cover;
+  object-position: center 18%;
+  border-radius: 10px 10px 0 0;
+  display: block;
+  background: #21262d;
+}
+
+.game-wishlist-dashboard .gwd-gg-name {
+  background: #243044;
+  margin: 0;
+  padding: 8px 8px 4px;
+  height: auto;
+  min-height: 36px;
+}
+
+.game-wishlist-dashboard .gwd-gg-from {
+  background: #243044;
+  border-radius: 0 0 10px 10px;
+  padding: 0 8px 8px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.game-wishlist-dashboard .gwd-from-lbl {
+  color: #8b95a7;
+}
+
+.game-wishlist-dashboard .gwd-from-val,
+.game-wishlist-dashboard .gwd-from-free {
+  font-weight: 700;
+  color: #f4f7fb;
+}
+
+.game-wishlist-dashboard .gwd-from-free {
+  color: #3dd68c;
+}
+
+.game-wishlist-dashboard .gwd-disc {
+  background: #16a34a;
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.game-wishlist-dashboard .gwd-check {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #16a34a;
+  color: #fff;
+  font-size: 11px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+
+.game-wishlist-dashboard a.gwd-ev {
+  flex: 0 0 148px;
+  position: relative;
+  text-decoration: none !important;
+  color: #fff !important;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #111;
+}
+
+.game-wishlist-dashboard .gwd-ev img {
+  width: 148px;
+  height: 196px;
+  object-fit: cover;
+  object-position: center top;
+  display: block;
+}
+
+.game-wishlist-dashboard .gwd-ev-cap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px 10px;
+  background: linear-gradient(transparent, #000c);
+}
+
+.game-wishlist-dashboard .gwd-ev-name {
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.game-wishlist-dashboard .gwd-ev-body {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.game-wishlist-dashboard a.gwd-deal {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #262d3a;
+  text-decoration: none !important;
+  color: #e8edf4 !important;
+}
+
+.game-wishlist-dashboard .gwd-deal img {
+  width: 92px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #21262d;
+}
+
+.game-wishlist-dashboard .gwd-deal-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.game-wishlist-dashboard .gwd-deal-name {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-wishlist-dashboard .gwd-deal-src {
+  font-size: 11px;
+  color: #8b95a7;
+}
+
+.game-wishlist-dashboard .gwd-deal-right {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.game-wishlist-dashboard .gwd-deal-price {
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.game-wishlist-dashboard .gwd-empty {
+  color: #8b95a7;
+  padding: 8px 0;
+}
