@@ -17,42 +17,39 @@ Opcional: plugin **Obsidian Charts** para o gráfico na nota de cada jogo.
 
 ## Instalação
 
-No Cursor / terminal, nesta pasta:
+No terminal, nesta pasta:
 
 ```bash
+copy config.example.json config.json
 npm install
 ```
 
-Não há dependências externas; o `npm install` só registra os scripts.
+Não há dependências externas; o `npm install` só registra os scripts. O `config.example.json` vem **sem** SteamID — cada pessoa gera o próprio com o login.
 
 ## Configuração
 
-Edite `config.json`:
+O `config.json` fica só na sua máquina (está no `.gitignore`). Copie o exemplo e ajuste se quiser:
 
 | Campo | O que é |
 | --- | --- |
-| `steamId` | SteamID64 (começa com `7656119…`) |
-| `profileUrl` | Alternativa: `https://steamcommunity.com/id/seuusuario` |
+| `steamId` | Preenchido pelo `conectar-steam.bat` |
+| `profileUrl` | Preenchido pelo login, ou a URL pública do perfil |
 | `currency` | `BRL` |
 | `updateHour` | Horário do Agendador, ex. `08:00` |
-| `vaultPath` | Pasta do vault do Obsidian |
+| `vaultPath` | Pasta do vault do Obsidian (vazio = pasta acima deste projeto) |
 | `projectFolder` | Subpasta deste projeto dentro do vault (`Steam`) |
 | `itadApiKey` | Opcional: chave [IsThereAnyDeal](https://isthereanydeal.com/) para preços de Nuuvem / GMG / Fanatical |
-
-Como achar o SteamID64: abra o perfil no navegador. Se a URL for `/profiles/7656119…`, copie esse número. Se for `/id/nome`, cole a URL em `profileUrl`.
 
 A lista **precisa estar pública**. Sem isso a Steam devolve lista vazia.
 
 ## Conectar sua conta Steam
 
-Eu (o assistente) **não** consigo logar na sua Steam. O Obsidian também não guarda sessão da loja.
-
-O que dá para fazer, localmente:
+Não tem SteamID no repositório. Cada clone faz o login local:
 
 1. Dê um duplo clique em `conectar-steam.bat`
 2. O navegador abre o **Sign in through Steam** (oficial da Valve)
 3. Você entra com sua conta (senha só na Steam; este projeto não vê)
-4. O SteamID é gravado em `config.json` e a wishlist é sincronizada
+4. O SteamID é gravado no **seu** `config.json`
 
 A lista de desejos precisa estar **pública**: Perfil Steam → Privacidade → Lista de desejos. Sem isso a API da Valve não entrega os jogos, mesmo depois do login. Isso não deixa o perfil inteiro público.
 

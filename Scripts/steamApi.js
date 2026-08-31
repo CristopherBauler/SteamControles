@@ -91,7 +91,7 @@ async function resolveSteamId({ steamId, profileUrl }) {
   const vanity = extractVanity(profileUrl) || extractVanity(steamId);
   if (!vanity) {
     throw new Error(
-      "Informe steamId (SteamID64, começa com 7656119) ou rode conectar-steam.bat."
+      "Informe steamId (SteamID64) ou rode conectar-steam.bat."
     );
   }
 
