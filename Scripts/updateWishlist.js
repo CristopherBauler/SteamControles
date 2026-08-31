@@ -176,6 +176,13 @@ async function main() {
       } else {
         console.log(paint("dim", `Biblioteca: ${ownedIds.size} jogos`));
       }
+      if (owned.familyFound && owned.familyComplete) {
+        console.log(paint("dim", `Steam Family: ${owned.familyCount || 0} jogos só da família`));
+      } else if (owned.familyFound) {
+        console.log(paint("yellow", "Grupo Família no PC, mas a lista compartilhada não veio — steamWebApiKey e/ou Detalhes dos jogos públicos."));
+      } else {
+        console.log(paint("yellow", "Steam Family não lido. Chave Web API (steamWebApiKey) e/ou Detalhes dos jogos públicos."));
+      }
     } catch (error) {
       console.log(paint("yellow", `Biblioteca: ${error.message}`));
     }

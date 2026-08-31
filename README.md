@@ -39,7 +39,7 @@ O `config.json` fica só na sua máquina (está no `.gitignore`). Copie o exempl
 | `vaultPath` | Pasta do vault do Obsidian (vazio = pasta acima deste projeto) |
 | `projectFolder` | Subpasta deste projeto dentro do vault (`Steam`) |
 | `itadApiKey` | Opcional: chave [IsThereAnyDeal](https://isthereanydeal.com/) para preços de Nuuvem / GMG / Fanatical |
-| `steamWebApiKey` | Opcional: chave da [Steam Web API](https://steamcommunity.com/dev/apikey) para horas da biblioteca se o XML público falhar |
+| `steamWebApiKey` | Opcional: chave da [Steam Web API](https://steamcommunity.com/dev/apikey). Sem ela, o backlog só vê o que o cliente Steam deste PC cacheou. **Biblioteca completa + Steam Family** pedem Detalhes dos jogos públicos **ou** essa chave. O `conectar-steam.bat` só grava o SteamID (OpenID); a chave é um passo extra. **Não** suba a chave nem o SteamID no git. |
 
 A lista **precisa estar pública**. Sem isso a Steam devolve lista vazia.
 
@@ -54,7 +54,14 @@ Não tem SteamID no repositório. Cada clone faz o login local:
 
 A lista de desejos precisa estar **pública**: Perfil Steam → Privacidade → Lista de desejos. Sem isso a API da Valve não entrega os jogos, mesmo depois do login. Isso não deixa o perfil inteiro público.
 
-Para o **backlog** (biblioteca inteira), o perfil precisa de **Detalhes dos jogos = Público**. Wishlist pública não basta. Sem isso o script tenta ler as horas do Steam instalado neste Windows.
+Para o **backlog** (biblioteca inteira, inclusive nunca jogados e jogos da **Steam Family**):
+
+1. Perfil → Privacidade → **Detalhes dos jogos = Público**, **ou**
+2. Uma chave em `steamWebApiKey` no `config.json`, gerada em https://steamcommunity.com/dev/apikey
+
+Wishlist pública não basta. Sem um desses dois, o script junta o que achar neste Windows (`localconfig.vdf`, cache da biblioteca, grupo Família no cliente) — jogos nunca abertos aqui e a lista compartilhada da família podem faltar. O `conectar-steam.bat` **não** pede a chave da Web API; só o SteamID64.
+
+Não coloque SteamID nem chave no `config.example.json` nem no repositório.
 
 ## Uso
 
@@ -88,7 +95,7 @@ Jogos saídos da wishlist **não perdem histórico**; a nota fica com `on_wishli
 
 ## Backlog (zerar o que você comprou)
 
-Nota `Backlog Steam.md`: a **biblioteca inteira** ainda não marcada. Marque a caixa e clique **Atualizar** para mandar o jogo para `Não vou jogar.md` (lista cinza). Desmarcar lá e Atualizar devolve ao Backlog. **Atualizar** só adiciona compras novas; nada some por horas jogadas.
+Nota `Backlog Steam.md`: a **biblioteca inteira** ainda não marcada, inclusive **nunca jogados** e jogos da **Steam Family** quando a Steam entrega essa lista. Marque a caixa e clique **Atualizar** para mandar o jogo para `Não vou jogar.md` (lista cinza). Desmarcar lá e Atualizar devolve ao Backlog. **Atualizar** só adiciona compras novas; nada some por horas jogadas.
 
 O botão **Atualizar** da wishlist também reconstrói os dois painéis. `npm run panel` usa o cache `Data/ownedPlaytimes.json` se a rede falhar.
 
@@ -144,7 +151,7 @@ Pode subir o código. **Não** dá para ninguém entrar na sua Steam com o que e
 
 Ainda assim **não publique dados pessoais**:
 
-- `config.json` — SteamID, caminho do PC, chave opcional do IsThereAnyDeal
+- `config.json` — SteamID, caminho do PC, chave opcional do IsThereAnyDeal e da Steam Web API
 - `Data/` — wishlist, histórico de preços, jogos da biblioteca
 - `Games/` e `Minha Wishlist Steam.md` — suas notas
 

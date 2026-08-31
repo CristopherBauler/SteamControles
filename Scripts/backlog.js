@@ -58,6 +58,11 @@ function hoursHtml(hours) {
   return `<span class="gwd-bl-hours" style="color:#4da3ff;font-weight:650">${esc(formatHours(hours))}</span>`;
 }
 
+function familyHtml(game) {
+  if (!game?.family) return "";
+  return ` <span class="gwd-bl-family" style="color:#c9a227;font-weight:600">Família</span>`;
+}
+
 function isCommunityLogo(url) {
   return /(?:steamcommunity\.com|media\.steampowered\.com)\/(?:public\/)?images\/apps\/\d+\//i.test(
     String(url || "")
@@ -195,6 +200,7 @@ function parseTaskLine(raw) {
     name,
     hours: parseHoursToken(rest),
     cover: cover && !isBannedCover(cover) ? cover : "",
+    family: /Família/i.test(rest),
   };
 }
 
@@ -263,6 +269,7 @@ function snapshotGame(game) {
     hours: gameHours(game),
     playtimeMinutes: Number(game.playtimeMinutes || Math.round(gameHours(game) * 60)),
     appType: game.appType || "",
+    family: Boolean(game.family),
   };
 }
 
@@ -293,6 +300,7 @@ function normalizeTracked(item, appId) {
     logo: item?.logo || "",
     appType: item?.appType || "",
     cover: item?.cover || item?.coverUrl || "",
+    family: Boolean(item?.family),
   };
 }
 
@@ -332,6 +340,8 @@ function upsertTracked(map, game) {
       existing.coverUrl = cover;
       existing.cover = cover;
     }
+    if (game.family) existing.family = true;
+    if (game.family === false && existing.hours > 0) existing.family = false;
     return;
   }
   map[appId] = normalizeTracked(
@@ -345,6 +355,7 @@ function upsertTracked(map, game) {
       playtimeMinutes: Math.round((hours || 0) * 60),
       logo: game.logo || "",
       appType: game.appType || "",
+      family: Boolean(game.family),
     },
     appId
   );
@@ -387,6 +398,7 @@ async function saveTracked(paths, map) {
       coverUrl: game.coverUrl || game.cover || "",
       firstHours: game.firstHours,
       hours: game.hours,
+      ...(game.family ? { family: true } : {}),
     };
   }
   await writeJson(paths.backlogTracked, {
@@ -429,22 +441,45 @@ function taskRow(game, checked) {
   const art = src
     ? `<img src="${esc(src)}" alt="">`
     : `<span class="gbd-cover-empty" aria-hidden="true"></span>`;
-  return `- [${mark}] ${art} **${name}** ${hoursHtml(gameHours(game))} <!--app:${Number(game.appId)}-->`;
+  return `- [${mark}] ${art} **${name}** ${hoursHtml(gameHours(game))}${familyHtml(game)} <!--app:${Number(game.appId)}-->`;
 }
 
 function privacyMessage(payload) {
-  if (payload?.source === "xml" || payload?.source === "api") return "";
-  if (payload?.source === "local" && payload.games?.length) {
-    return "Horas lidas do Steam **neste PC**. O perfil ainda está com Detalhes dos jogos privado — jogos nunca abertos podem faltar. Perfil → Privacidade → **Detalhes dos jogos = Público** (wishlist pública não basta).";
+  const lines = [];
+  const communityOk = payload?.source === "xml" || payload?.source === "api";
+  if (!communityOk) {
+    if (payload?.source === "local" && payload.games?.length) {
+      lines.push(
+        "Horas lidas do Steam **neste PC**. Jogos nunca abertos aqui ainda podem faltar. Perfil → Privacidade → **Detalhes dos jogos = Público** (wishlist pública não basta), ou coloque **steamWebApiKey** no config.json (https://steamcommunity.com/dev/apikey). O conectar-steam.bat só grava o SteamID, não a chave."
+      );
+    } else if (!payload?.games?.length) {
+      lines.push(
+        "A Steam não entregou a biblioteca. Perfil → Privacidade → **Detalhes dos jogos = Público**, ou **steamWebApiKey** no config.json (https://steamcommunity.com/dev/apikey)."
+      );
+    }
   }
-  return "A Steam não entregou as horas jogadas. Perfil → Privacidade → **Detalhes dos jogos = Público**. Wishlist pública não basta. Sem isso não dá para montar o backlog.";
+  if (payload?.familyFound && !payload?.familyComplete) {
+    lines.push(
+      "Grupo **Steam Family** encontrado neste PC, mas a lista compartilhada não veio. Para os jogos da família: **Detalhes dos jogos = Público** (sua conta e/ou dos membros) e/ou **steamWebApiKey** no config.json."
+    );
+  } else if (!payload?.familyFound && !payload?.familyComplete) {
+    lines.push(
+      "Jogos do **Steam Family / Family Sharing** não foram lidos. Ative **Detalhes dos jogos = Público** e/ou uma chave em **steamWebApiKey** (https://steamcommunity.com/dev/apikey)."
+    );
+  }
+  return lines.join(" ");
 }
 
 function sourceHint(payload) {
-  if (payload?.source === "local") return "fonte: Steam local neste PC";
-  if (payload?.source === "api") return "fonte: API da Steam";
-  if (payload?.source === "xml") return "fonte: perfil público";
-  return "sem horas da Steam";
+  const bits = [];
+  if (payload?.source === "local") bits.push("fonte: Steam local neste PC");
+  else if (payload?.source === "api") bits.push("fonte: API da Steam");
+  else if (payload?.source === "xml") bits.push("fonte: perfil público");
+  else bits.push("sem horas da Steam");
+  if (payload?.familyCount) bits.push(`${payload.familyCount} da família`);
+  else if (payload?.familyFound) bits.push("grupo família no PC");
+  if (payload?.cacheExtra) bits.push(`+${payload.cacheExtra} do cache local`);
+  return bits.join(" · ");
 }
 
 function renderBacklog({ open = [], payload = {}, timezone, updatedAt }) {
@@ -592,6 +627,10 @@ async function refreshBacklog({
       updatedAt: nowIso(),
       source: payload.source,
       communityPrivate: Boolean(payload.communityPrivate),
+      familyFound: Boolean(payload.familyFound),
+      familyComplete: Boolean(payload.familyComplete),
+      familyCount: Number(payload.familyCount || 0),
+      cacheExtra: Number(payload.cacheExtra || 0),
       count: (payload.games || []).length,
       games: payload.games || [],
     });

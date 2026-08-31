@@ -336,19 +336,8 @@ async function fetchOwnedGamesFromXml(steamId64) {
   return parseOwnedGamesXml(xml);
 }
 
-async function fetchOwnedGamesFromApi(steamId64, apiKey) {
-  const url = new URL("https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/");
-  url.searchParams.set("key", apiKey);
-  url.searchParams.set("steamid", String(steamId64));
-  url.searchParams.set("include_appinfo", "1");
-  url.searchParams.set("include_played_free_games", "1");
-  url.searchParams.set("format", "json");
-  const payload = await fetchJson(url);
-  const list = payload?.response?.games;
-  if (!Array.isArray(list) || !list.length) {
-    return { games: [], privateProfile: true };
-  }
-  const games = list
+function mapOwnedApiGames(list) {
+  return (list || [])
     .map((item) => {
       const appId = Number(item.appid);
       const minutes = Number(item.playtime_forever || 0);
@@ -361,11 +350,40 @@ async function fetchOwnedGamesFromApi(steamId64, apiKey) {
       };
     })
     .filter((game) => Number.isInteger(game.appId) && game.appId > 0);
-  return { games, privateProfile: false };
+}
+
+async function fetchOwnedGamesFromApi(steamId64, apiKey) {
+  const url = new URL("https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/");
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("steamid", String(steamId64));
+  url.searchParams.set("include_appinfo", "1");
+  url.searchParams.set("include_played_free_games", "1");
+  url.searchParams.set("include_free_sub", "1");
+  url.searchParams.set("format", "json");
+  let payload;
+  try {
+    payload = await fetchJson(url);
+  } catch {
+    url.searchParams.delete("include_free_sub");
+    payload = await fetchJson(url);
+  }
+  const list = payload?.response?.games;
+  if (!Array.isArray(list) || !list.length) {
+    return { games: [], privateProfile: true };
+  }
+  return { games: mapOwnedApiGames(list), privateProfile: false };
 }
 
 function steamId64ToAccountId(steamId64) {
   return (BigInt(String(steamId64)) - 76561197960265728n).toString();
+}
+
+function accountIdToSteamId64(accountId) {
+  return (BigInt(String(accountId)) + 76561197960265728n).toString();
+}
+
+function isBareAppName(name) {
+  return /^App \d+$/i.test(String(name || "").trim());
 }
 
 function extractBraceBody(text, openIdx) {
@@ -579,30 +597,264 @@ async function collectAppManifestNames(steamRoot) {
   return names;
 }
 
-async function fetchOwnedGamesFromLocal(steamId64) {
-  const accountId = steamId64ToAccountId(steamId64);
-  let steamRoot = "";
-  let vdfText = "";
+const CACHE_SKIP_TYPES = new Set([
+  "config",
+  "tool",
+  "demo",
+  "dlc",
+  "music",
+  "video",
+  "hardware",
+  "series",
+  "advertising",
+]);
+
+async function findSteamRootForAccount(accountId) {
   for (const root of defaultSteamRoots()) {
-    const candidate = path.join(root, "userdata", accountId, "config", "localconfig.vdf");
-    vdfText = await readSteamText(candidate);
-    if (vdfText) {
-      steamRoot = root;
-      break;
+    const localConfig = await readSteamText(
+      path.join(root, "userdata", String(accountId), "config", "localconfig.vdf")
+    );
+    if (localConfig) return { steamRoot: root, localConfig };
+  }
+  return { steamRoot: "", localConfig: "" };
+}
+
+async function loadAppInfoMeta(steamRoot, wantedIds) {
+  const meta = new Map();
+  const manifestNames = steamRoot ? await collectAppManifestNames(steamRoot) : new Map();
+  for (const [appId, name] of manifestNames) {
+    meta.set(appId, { name, appType: "" });
+  }
+  if (!steamRoot) return meta;
+  const appinfoBuf = await readSteamFile(path.join(steamRoot, "appcache", "appinfo.vdf"));
+  if (!appinfoBuf) return meta;
+  const fromInfo = parseAppInfoNames(appinfoBuf, wantedIds instanceof Set ? wantedIds : null);
+  for (const [appId, info] of fromInfo) {
+    const prev = meta.get(appId);
+    meta.set(appId, {
+      name: info.name || prev?.name || "",
+      appType: info.appType || prev?.appType || "",
+    });
+  }
+  return meta;
+}
+
+function namedGameFromMeta(appId, meta, extras = {}) {
+  if (appId === 7 || appId === 228980 || appId === 250820) return null;
+  const info = meta.get(appId);
+  const name = info?.name || extras.name || "";
+  if (!name || isBareAppName(name)) return null;
+  const appType = String(info?.appType || extras.appType || "").toLowerCase();
+  if (CACHE_SKIP_TYPES.has(appType)) return null;
+  return {
+    appId,
+    name,
+    logo: extras.logo || "",
+    hours: extras.hours != null ? Number(extras.hours) : 0,
+    playtimeMinutes:
+      extras.playtimeMinutes != null ? Number(extras.playtimeMinutes) : Math.round((extras.hours || 0) * 60),
+    appType: info?.appType || extras.appType || "",
+    family: Boolean(extras.family),
+  };
+}
+
+function parseFamilyGroupFromVdf(vdfText) {
+  const text = String(vdfText || "");
+  const at = text.search(/"FamilyGroup"\s*\{/i);
+  if (at < 0) return null;
+  const brace = text.indexOf("{", at);
+  const { body } = extractBraceBody(text, brace);
+  const groupid = body.match(/"groupid"\s+"(\d+)"/i)?.[1] || "";
+  const name = body.match(/"name"\s+"([^"]*)"/i)?.[1] || "";
+  const members = [];
+  const seen = new Set();
+  for (const match of body.matchAll(/"accountid"\s+"(\d+)"/gi)) {
+    const id = match[1];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    members.push(id);
+  }
+  if (!groupid && !members.length) return null;
+  return { groupid, name, members };
+}
+
+function addNumericId(set, value) {
+  const appId = Number(value);
+  if (Number.isInteger(appId) && appId > 0) set.add(appId);
+}
+
+async function collectLibraryCacheAppIds(steamRoot, accountId) {
+  const ids = new Set();
+  const userCache = path.join(steamRoot, "userdata", String(accountId), "config", "librarycache");
+  try {
+    for (const file of await fs.readdir(userCache)) {
+      const match = file.match(/^(\d+)\.json$/i);
+      if (match) addNumericId(ids, match[1]);
+    }
+  } catch {
+    // pasta ainda não existe
+  }
+  const artCache = path.join(steamRoot, "appcache", "librarycache");
+  try {
+    for (const entry of await fs.readdir(artCache, { withFileTypes: true })) {
+      if (/^\d+$/.test(entry.name)) addNumericId(ids, entry.name);
+    }
+  } catch {
+    // cache de capas ausente
+  }
+  const cloud = path.join(
+    steamRoot,
+    "userdata",
+    String(accountId),
+    "config",
+    "cloudstorage",
+    "cloud-storage-namespace-1.json"
+  );
+  const cloudText = await readSteamText(cloud);
+  if (cloudText) {
+    try {
+      const rows = JSON.parse(cloudText);
+      for (const pair of Array.isArray(rows) ? rows : []) {
+        const key = String(pair?.[0] || "");
+        const rec = pair?.[1] || {};
+        const rollup = key.match(/^NewContentRollup_(\d+)$/i);
+        if (rollup) addNumericId(ids, rollup[1]);
+        if (!/user-collections/i.test(key) || rec.is_deleted) continue;
+        let added = [];
+        try {
+          const value = typeof rec.value === "string" ? JSON.parse(rec.value) : rec.value;
+          added = value?.added || [];
+        } catch {
+          added = [];
+        }
+        for (const appId of added) addNumericId(ids, appId);
+      }
+    } catch {
+      // json de coleções ilegível
     }
   }
-  if (!vdfText) {
-    return { games: [], privateProfile: true, localAvailable: false };
+  return ids;
+}
+
+function parseSharingLogAppIds(text) {
+  const ids = new Set();
+  for (const match of String(text || "").matchAll(/\bapp\s+(\d+)\b/gi)) {
+    addNumericId(ids, match[1]);
+  }
+  return ids;
+}
+
+function mergeOwnedGame(map, game, { family = false, source = "" } = {}) {
+  const appId = Number(game?.appId);
+  if (!Number.isInteger(appId) || appId <= 0) return;
+  const hours =
+    game.hours != null && Number.isFinite(Number(game.hours))
+      ? Number(game.hours)
+      : Number(game.playtimeMinutes || 0) / 60;
+  const existing = map.get(appId);
+  if (!existing) {
+    map.set(appId, {
+      appId,
+      name: game.name || `App ${appId}`,
+      logo: game.logo || "",
+      hours: hours || 0,
+      playtimeMinutes: game.playtimeMinutes != null ? Number(game.playtimeMinutes) : Math.round((hours || 0) * 60),
+      appType: game.appType || "",
+      family: Boolean(family || game.family),
+      source: source || game.source || "",
+    });
+    return;
+  }
+  if (game.name && !isBareAppName(game.name)) existing.name = game.name;
+  if ((hours || 0) > (existing.hours || 0)) {
+    existing.hours = hours;
+    existing.playtimeMinutes = Math.round(hours * 60);
+  }
+  if (game.logo && !existing.logo) existing.logo = game.logo;
+  if (game.appType && !existing.appType) existing.appType = game.appType;
+  if (family || game.family) {
+    if (!existing.source || existing.source === "family") existing.family = true;
+  }
+  if (source && source !== "family" && !existing.family) existing.source = source;
+}
+
+async function collectNamedCacheGames(steamRoot, accountId, meta) {
+  const ids = await collectLibraryCacheAppIds(steamRoot, accountId);
+  const games = [];
+  for (const appId of ids) {
+    const game = namedGameFromMeta(appId, meta);
+    if (game) games.push(game);
+  }
+  return games;
+}
+
+async function fetchFamilyGroupFromApi(steamId64, apiKey) {
+  const url = new URL("https://api.steampowered.com/IFamilyGroupsService/GetFamilyGroupForUser/v1/");
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("steamid", String(steamId64));
+  url.searchParams.set("include_family_group_response", "1");
+  const payload = await fetchJson(url, { retries: 0, timeoutMs: 12000 });
+  const res = payload?.response || {};
+  const groupid = String(res.family_groupid || res.familyGroupid || "");
+  const group = res.family_group || res.familyGroup || {};
+  const members = [];
+  for (const member of group.members || []) {
+    if (member.steamid) members.push(String(member.steamid));
+    else if (member.accountid != null) members.push(accountIdToSteamId64(member.accountid));
+  }
+  return {
+    groupid,
+    name: group.name || "",
+    members,
+  };
+}
+
+function mapSharedLibraryApps(apps, steamId64) {
+  const games = [];
+  for (const item of apps || []) {
+    const appId = Number(item.appid ?? item.appId);
+    if (!Number.isInteger(appId) || appId <= 0) continue;
+    const owners = (item.owner_steamids || item.ownerSteamids || []).map(String);
+    const family = owners.length ? !owners.includes(String(steamId64)) : true;
+    const minutes = Number(item.playtime?.playtime_forever ?? item.playtime_forever ?? 0);
+    games.push({
+      appId,
+      name: item.name || `App ${appId}`,
+      logo: "",
+      hours: minutes / 60,
+      playtimeMinutes: minutes,
+      appType: item.app_type || item.type || "",
+      family,
+    });
+  }
+  return games;
+}
+
+async function fetchSharedLibraryApps(familyGroupId, apiKey, steamId64) {
+  const url = new URL("https://api.steampowered.com/IFamilyGroupsService/GetSharedLibraryApps/v1/");
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("family_groupid", String(familyGroupId));
+  url.searchParams.set("include_own", "1");
+  url.searchParams.set("include_excluded", "0");
+  url.searchParams.set("include_free", "1");
+  url.searchParams.set("include_non_games", "0");
+  url.searchParams.set("language", "english");
+  url.searchParams.set("max_apps", "10000");
+  url.searchParams.set("steamid", String(steamId64));
+  const payload = await fetchJson(url, { retries: 0, timeoutMs: 20000 });
+  return mapSharedLibraryApps(payload?.response?.apps, steamId64);
+}
+
+async function fetchOwnedGamesFromLocal(steamId64) {
+  const accountId = steamId64ToAccountId(steamId64);
+  const { steamRoot, localConfig } = await findSteamRootForAccount(accountId);
+  if (!localConfig) {
+    return { games: [], privateProfile: true, localAvailable: false, steamRoot: "", localConfig: "" };
   }
 
-  const playtimes = parseLocalConfigPlaytimes(vdfText);
-  const manifestNames = await collectAppManifestNames(steamRoot);
-  const meta = new Map();
-  const appinfoBuf = await readSteamFile(path.join(steamRoot, "appcache", "appinfo.vdf"));
-  if (appinfoBuf) {
-    const fromInfo = parseAppInfoNames(appinfoBuf, new Set(playtimes.map((item) => item.appId)));
-    for (const [appId, info] of fromInfo) meta.set(appId, info);
-  }
+  const playtimes = parseLocalConfigPlaytimes(localConfig);
+  const wanted = new Set(playtimes.map((item) => item.appId));
+  const meta = await loadAppInfoMeta(steamRoot, wanted);
 
   const games = playtimes
     .filter((item) => Number.isInteger(item.appId) && item.appId > 0)
@@ -610,7 +862,7 @@ async function fetchOwnedGamesFromLocal(steamId64) {
       const info = meta.get(item.appId);
       return {
         appId: item.appId,
-        name: info?.name || manifestNames.get(item.appId) || `App ${item.appId}`,
+        name: info?.name || `App ${item.appId}`,
         logo: "",
         hours: item.hours,
         playtimeMinutes: item.playtimeMinutes,
@@ -618,14 +870,118 @@ async function fetchOwnedGamesFromLocal(steamId64) {
       };
     });
 
-  return { games, privateProfile: true, localAvailable: true };
+  return { games, privateProfile: true, localAvailable: true, steamRoot, localConfig, meta };
+}
+
+async function fetchFamilySharedGames(steamId64, { apiKey, steamRoot, localConfig, meta } = {}) {
+  const accountId = steamId64ToAccountId(steamId64);
+  const localGroup = parseFamilyGroupFromVdf(localConfig || "");
+  let apiGroup = null;
+  let sharedFromApi = [];
+  if (apiKey) {
+    try {
+      apiGroup = await fetchFamilyGroupFromApi(steamId64, apiKey);
+    } catch {
+      apiGroup = null;
+    }
+    const groupid = apiGroup?.groupid || localGroup?.groupid;
+    if (groupid) {
+      try {
+        sharedFromApi = await fetchSharedLibraryApps(groupid, apiKey, steamId64);
+      } catch {
+        sharedFromApi = [];
+      }
+    }
+  }
+
+  const found = Boolean(localGroup || apiGroup?.groupid);
+  const gamesById = new Map();
+  const nameMeta = meta || (steamRoot ? await loadAppInfoMeta(steamRoot, null) : new Map());
+
+  for (const game of sharedFromApi) {
+    const named = namedGameFromMeta(game.appId, nameMeta, game) || (isBareAppName(game.name) ? null : game);
+    if (named) mergeOwnedGame(gamesById, { ...named, family: true }, { family: true, source: "family" });
+  }
+
+  const sharingLog = steamRoot ? await readSteamText(path.join(steamRoot, "logs", "librarysharing_log.txt")) : "";
+  for (const appId of parseSharingLogAppIds(sharingLog)) {
+    const named = namedGameFromMeta(appId, nameMeta, { family: true });
+    if (named) mergeOwnedGame(gamesById, named, { family: true, source: "family" });
+  }
+
+  const memberIds = new Set();
+  if (localGroup) {
+    for (const id of localGroup.members) {
+      if (String(id) === String(accountId)) continue;
+      memberIds.add(accountIdToSteamId64(id));
+    }
+  }
+  for (const id of apiGroup?.members || []) {
+    if (String(id) === String(steamId64) || String(id) === String(accountId)) continue;
+    memberIds.add(/^\d{17}$/.test(String(id)) ? String(id) : accountIdToSteamId64(id));
+  }
+
+  let memberLibraries = 0;
+  for (const memberSteamId of memberIds) {
+    try {
+      const xml = await fetchOwnedGamesFromXml(memberSteamId);
+      if (xml.games.length) {
+        memberLibraries += 1;
+        for (const game of xml.games) {
+          mergeOwnedGame(gamesById, { ...game, hours: 0, playtimeMinutes: 0, family: true }, { family: true, source: "family" });
+        }
+      }
+    } catch {
+      // perfil do membro privado
+    }
+    if (apiKey) {
+      try {
+        const api = await fetchOwnedGamesFromApi(memberSteamId, apiKey);
+        if (api.games.length) {
+          memberLibraries += 1;
+          for (const game of api.games) {
+            mergeOwnedGame(
+              gamesById,
+              { ...game, hours: 0, playtimeMinutes: 0, family: true },
+              { family: true, source: "family" }
+            );
+          }
+        }
+      } catch {
+        // chave sem acesso à biblioteca do membro
+      }
+    }
+  }
+
+  const complete = sharedFromApi.length > 0 || memberLibraries > 0;
+  return {
+    games: [...gamesById.values()].map((game) => ({ ...game, family: true, hours: game.hours || 0 })),
+    found,
+    complete,
+    groupName: apiGroup?.name || localGroup?.name || "",
+    groupid: apiGroup?.groupid || localGroup?.groupid || "",
+    memberCount: (localGroup?.members?.length || memberIds.size + (found ? 1 : 0)) || 0,
+  };
 }
 
 async function fetchOwnedPlaytimes(steamId64, { apiKey } = {}) {
+  const owned = new Map();
+  const used = [];
+  let xmlOk = false;
+  let apiOk = false;
+
+  const local = await fetchOwnedGamesFromLocal(steamId64);
+  if (local.games.length) {
+    used.push("local");
+    for (const game of local.games) mergeOwnedGame(owned, game, { source: "local" });
+  }
+
   try {
     const xml = await fetchOwnedGamesFromXml(steamId64);
     if (xml.games.length) {
-      return { ...xml, source: "xml", communityPrivate: false };
+      xmlOk = true;
+      used.push("xml");
+      for (const game of xml.games) mergeOwnedGame(owned, game, { source: "xml" });
     }
   } catch {
     // perfil privado, sign-in wall ou XML vazio
@@ -635,33 +991,83 @@ async function fetchOwnedPlaytimes(steamId64, { apiKey } = {}) {
     try {
       const api = await fetchOwnedGamesFromApi(steamId64, apiKey);
       if (api.games.length) {
-        return { ...api, source: "api", communityPrivate: false };
+        apiOk = true;
+        used.push("api");
+        for (const game of api.games) mergeOwnedGame(owned, game, { source: "api" });
       }
     } catch {
       // chave inválida ou perfil ainda privado
     }
   }
 
-  const local = await fetchOwnedGamesFromLocal(steamId64);
-  if (local.games.length) {
-    return {
-      games: local.games,
-      source: "local",
-      communityPrivate: true,
-      localAvailable: true,
-    };
+  let cacheCount = 0;
+  if (local.steamRoot) {
+    const wanted = new Set(owned.keys());
+    const cacheIds = await collectLibraryCacheAppIds(local.steamRoot, steamId64ToAccountId(steamId64));
+    for (const id of cacheIds) wanted.add(id);
+    const sharingLog = await readSteamText(path.join(local.steamRoot, "logs", "librarysharing_log.txt"));
+    for (const id of parseSharingLogAppIds(sharingLog)) wanted.add(id);
+    const meta = await loadAppInfoMeta(local.steamRoot, wanted);
+    local.meta = meta;
+    const cacheGames = await collectNamedCacheGames(local.steamRoot, steamId64ToAccountId(steamId64), meta);
+    cacheCount = cacheGames.filter((game) => !owned.has(game.appId)).length;
+    if (cacheGames.length) {
+      used.push("cache");
+      for (const game of cacheGames) mergeOwnedGame(owned, game, { source: "cache" });
+    }
   }
 
+  const family = await fetchFamilySharedGames(steamId64, {
+    apiKey,
+    steamRoot: local.steamRoot,
+    localConfig: local.localConfig,
+    meta: local.meta,
+  });
+  let familyAdded = 0;
+  if (family.games.length) {
+    used.push("family");
+    for (const game of family.games) {
+      if (!owned.has(game.appId)) familyAdded += 1;
+      const already = owned.get(game.appId);
+      if (already) {
+        mergeOwnedGame(owned, { ...game, hours: already.hours, playtimeMinutes: already.playtimeMinutes, family: false });
+      } else {
+        mergeOwnedGame(owned, { ...game, hours: 0, playtimeMinutes: 0 }, { family: true, source: "family" });
+      }
+    }
+  }
+
+  const games = [...owned.values()].map((game) => ({
+    appId: game.appId,
+    name: game.name,
+    logo: game.logo,
+    hours: game.hours || 0,
+    playtimeMinutes: game.playtimeMinutes || 0,
+    appType: game.appType || "",
+    family: Boolean(game.family),
+  }));
+
+  let source = "none";
+  if (apiOk) source = "api";
+  else if (xmlOk) source = "xml";
+  else if (local.games.length || cacheCount) source = "local";
+
   return {
-    games: [],
-    source: "none",
-    communityPrivate: true,
+    games,
+    source,
+    communityPrivate: !xmlOk && !apiOk,
     localAvailable: Boolean(local.localAvailable),
+    familyFound: family.found,
+    familyComplete: family.complete,
+    familyCount: familyAdded,
+    familyGroupName: family.groupName,
+    cacheExtra: cacheCount,
+    sources: used,
   };
 }
 
-async function fetchOwnedGames(steamId64) {
-  const owned = await fetchOwnedPlaytimes(steamId64);
+async function fetchOwnedGames(steamId64, { apiKey } = {}) {
+  const owned = await fetchOwnedPlaytimes(steamId64, { apiKey });
   return {
     ids: new Set(owned.games.map((game) => game.appId)),
     privateProfile: owned.communityPrivate && owned.source !== "local",
