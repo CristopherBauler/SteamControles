@@ -154,6 +154,8 @@ function buildNote(game, { previousFileName, userNotes }) {
     `on_wishlist: ${yamlScalar(game.onWishlist)}`,
     `owned: ${yamlScalar(Boolean(game.owned))}`,
     `on_sale: ${yamlScalar(game.onSale)}`,
+    `coming_soon: ${yamlScalar(Boolean(game.comingSoon))}`,
+    `is_free: ${yamlScalar(Boolean(game.isFree || game.currentPrice === 0))}`,
     `review_desc: ${yamlScalar(game.reviewDesc)}`,
     `review_percent: ${yamlScalar(game.reviewPercent)}`,
     `steam_tags: ${yamlScalar((game.steamTags || []).join(", "))}`,

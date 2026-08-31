@@ -45,11 +45,24 @@ function isRateLimitError(error) {
   return /\bHTTP 429\b/i.test(String(error?.message || error || ""));
 }
 
+function isForbiddenError(error) {
+  if (error?.status === 403) return true;
+  return /\bHTTP 403\b/i.test(String(error?.message || error || ""));
+}
+
 function httpError(status, retryAfterMs) {
   const error = new Error(`HTTP ${status}`);
   error.status = status;
   if (retryAfterMs != null) error.retryAfterMs = retryAfterMs;
   return error;
+}
+
+function shouldRetryHttp(error, attempt, maxAttempts) {
+  if (attempt >= maxAttempts) return false;
+  const status = Number(error?.status) || 0;
+  if (status === 403 || status === 404) return false;
+  if (status >= 400 && status < 500 && status !== 429) return false;
+  return status === 429 || status >= 500 || status === 0;
 }
 
 async function fetchJson(url, { retries = 1, timeoutMs = 25000 } = {}) {
@@ -63,11 +76,8 @@ async function fetchJson(url, { retries = 1, timeoutMs = 25000 } = {}) {
         headers: STEAM_HEADERS,
         signal: AbortSignal.timeout(timeoutMs),
       });
-      if (response.status === 429 || response.status >= 500) {
-        throw httpError(response.status, parseRetryAfterMs(response.headers.get("retry-after")));
-      }
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status} em ${url}`);
+        throw httpError(response.status, parseRetryAfterMs(response.headers.get("retry-after")));
       }
       const contentType = response.headers.get("content-type") || "";
       if (contentType.includes("xml") || contentType.includes("html")) {
@@ -76,7 +86,7 @@ async function fetchJson(url, { retries = 1, timeoutMs = 25000 } = {}) {
       return await response.json();
     } catch (error) {
       lastError = error;
-      if (attempt >= maxAttempts) break;
+      if (!shouldRetryHttp(error, attempt, maxAttempts)) break;
       const is429 = error.status === 429 || isRateLimitError(error);
       const waitMs = is429 && error.retryAfterMs > 0 ? error.retryAfterMs : SHORT_RETRY_MS;
       await sleep(waitMs);
@@ -203,6 +213,7 @@ function parseAppDetails(appId, data) {
     developers: data?.developers || [],
     publishers: data?.publishers || [],
     comingSoon: Boolean(data?.release_date?.coming_soon),
+    releaseDate: String(data?.release_date?.date || "").trim(),
   };
 }
 
@@ -231,7 +242,8 @@ async function fetchAppDetails(appId, { country, language, retries = 0, timeoutM
       shortDescription: "",
       developers: [],
       publishers: [],
-      comingSoon: false,
+      comingSoon: undefined,
+      releaseDate: "",
       unavailable: true,
     };
   }
@@ -250,6 +262,7 @@ async function fetchPriceOverview(appId, { country, language }) {
   const data = entry?.data || {};
   const overview = data.price_overview;
   const isFree = Boolean(data.is_free);
+  const release = data.release_date;
   if (!entry?.success) {
     return { appId, currentPrice: null, initialPrice: null, discount: 0, unavailable: true };
   }
@@ -258,6 +271,9 @@ async function fetchPriceOverview(appId, { country, language }) {
     currentPrice: isFree ? 0 : centsToReais(overview?.final),
     initialPrice: isFree ? 0 : centsToReais(overview?.initial),
     discount: isFree ? 0 : Number(overview?.discount_percent || 0),
+    isFree,
+    comingSoon: release ? Boolean(release.coming_soon) : undefined,
+    releaseDate: release?.date ? String(release.date).trim() : undefined,
     unavailable: !overview && !isFree,
   };
 }
@@ -1223,20 +1239,6 @@ async function fetchStoreHub({ country = "br", language = "portuguese" } = {}) {
   }
 
   const specials = (data.specials?.items || []).map((item) => mapStoreItem(item, "Steam"));
-  const newReleaseDeals = (data.new_releases?.items || [])
-    .filter((item) => item.discounted)
-    .map((item) => mapStoreItem(item, "Steam"));
-  const seenNew = new Set(newReleaseDeals.map((item) => item.appId).filter(Boolean));
-  const newDeals = [...newReleaseDeals];
-  for (const item of specials) {
-    if (newDeals.length >= 10) break;
-    if (item.appId && seenNew.has(item.appId)) continue;
-    newDeals.push(item);
-  }
-
-  const bestDeals = [...specials]
-    .sort((a, b) => Number(b.discount || 0) - Number(a.discount || 0))
-    .slice(0, 10);
 
   let catalog = [];
   try {
@@ -1263,8 +1265,8 @@ async function fetchStoreHub({ country = "br", language = "portuguese" } = {}) {
   return {
     events,
     specials: specials.slice(0, 12),
-    newDeals: newDeals.slice(0, 10),
-    bestDeals,
+    newDeals: [],
+    bestDeals: [],
     dealsStrip,
   };
 }
@@ -1273,12 +1275,12 @@ function portraitUrl(appId) {
   return `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`;
 }
 
-async function searchSteamStore(term, { country = "br", language = "portuguese" } = {}) {
+async function searchSteamStore(term, { country = "br", language = "portuguese", timeoutMs = 4000 } = {}) {
   const url = new URL("https://store.steampowered.com/api/storesearch/");
   url.searchParams.set("term", term);
   url.searchParams.set("cc", country);
   url.searchParams.set("l", language);
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(url, { retries: 0, timeoutMs });
   const items = payload?.items || [];
   if (!items.length) return null;
   const needle = String(term).toLowerCase().trim();
@@ -1318,4 +1320,5 @@ module.exports = {
   capsuleUrl,
   portraitUrl,
   isRateLimitError,
+  isForbiddenError,
 };
