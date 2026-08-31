@@ -1,4 +1,6 @@
-# Steam Wishlist Dashboard
+# SteamControles
+
+Controlador de valores da Steam: vê os preços da sua wishlist e dos jogos mais populares do momento no gg.deals e na Steam.
 
 Dashboard local para o Obsidian: lê a **wishlist pública da Steam**, grava preços em **BRL** e monta um painel com promoções e histórico.
 
