@@ -79,15 +79,19 @@ function sectionHead(title, extra = "") {
   </div>`;
 }
 
-function wishHead(active) {
-  const priceOn = active === "preco" ? " is-on" : "";
-  const discOn = active === "desconto" ? " is-on" : "";
-  return `<div class="gwd-sechead">
-    <div class="gwd-sectitle">Minha lista de desejos</div>
-    <div class="gwd-sort">
-      <a class="gwd-sort-btn${priceOn}" href="#gwd-wish-price">Preço</a>
-      <a class="gwd-sort-btn${discOn}" href="#gwd-wish-disc">Desconto</a>
+function wishSortBlock(priceCardsHtml, discCardsHtml) {
+  return `<div class="gwd-wish-block">
+    <input type="radio" class="gwd-wish-radio gwd-wish-radio-price" name="gwd-wish-sort" id="gwd-wish-sort-price" checked>
+    <input type="radio" class="gwd-wish-radio gwd-wish-radio-disc" name="gwd-wish-sort" id="gwd-wish-sort-disc">
+    <div class="gwd-sechead">
+      <div class="gwd-sectitle">Minha lista de desejos</div>
+      <div class="gwd-sort">
+        <label class="gwd-sort-btn" for="gwd-wish-sort-price">Preço</label>
+        <label class="gwd-sort-btn" for="gwd-wish-sort-disc">Desconto</label>
+      </div>
     </div>
+    <div class="gwd-wish-pane gwd-wish-pane-price">${scrollRow(priceCardsHtml)}</div>
+    <div class="gwd-wish-pane gwd-wish-pane-disc">${scrollRow(discCardsHtml)}</div>
   </div>`;
 }
 
@@ -236,14 +240,7 @@ tags:
   </div>
   <div class="gwd-hint">${byPrice.length} jogos · verde promoção · azul preço normal · vermelho aumentou do valor gravado · ${ownedHint}<br>Atualizar abre uma janela do Windows. Depois volte aqui e pressione Ctrl+R. Se o Windows perguntar, permita o atalho steamwish.</div>
 
-  <div class="gwd-wish-block" id="gwd-wish-price">
-    ${wishHead("preco")}
-    ${scrollRow(wishPriceCards)}
-  </div>
-  <div class="gwd-wish-block" id="gwd-wish-disc">
-    ${wishHead("desconto")}
-    ${scrollRow(wishDiscCards)}
-  </div>
+  ${wishSortBlock(wishPriceCards, wishDiscCards)}
 
   ${sectionHead("Mais desejados na Steam", "ranking público da loja · inclui os que você já tem")}
   ${scrollRow(popularCards)}

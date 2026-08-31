@@ -93,7 +93,26 @@
   flex-shrink: 0;
 }
 
-.game-wishlist-dashboard a.gwd-sort-btn {
+.game-wishlist-dashboard .gwd-wish-block {
+  position: relative;
+}
+
+.game-wishlist-dashboard .gwd-wish-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.game-wishlist-dashboard label.gwd-sort-btn {
   background: #2a3344;
   color: #c5ccd6 !important;
   text-decoration: none !important;
@@ -101,28 +120,39 @@
   padding: 4px 12px;
   font-size: 12px;
   font-weight: 650;
+  cursor: pointer;
+  user-select: none;
 }
 
-.game-wishlist-dashboard a.gwd-sort-btn.is-on {
+.game-wishlist-dashboard label.gwd-sort-btn[for="gwd-wish-sort-price"] {
   background: #2563eb;
   color: #fff !important;
 }
 
-.game-wishlist-dashboard #gwd-wish-price,
-.game-wishlist-dashboard #gwd-wish-disc {
-  scroll-margin-top: 8px;
+.game-wishlist-dashboard .gwd-wish-radio-disc:checked ~ .gwd-sechead label.gwd-sort-btn[for="gwd-wish-sort-price"],
+.game-wishlist-dashboard .gwd-wish-block:has(.gwd-wish-radio-disc:checked) label.gwd-sort-btn[for="gwd-wish-sort-price"] {
+  background: #2a3344;
+  color: #c5ccd6 !important;
 }
 
-.game-wishlist-dashboard #gwd-wish-disc {
+.game-wishlist-dashboard .gwd-wish-radio-disc:checked ~ .gwd-sechead label.gwd-sort-btn[for="gwd-wish-sort-disc"],
+.game-wishlist-dashboard .gwd-wish-block:has(.gwd-wish-radio-disc:checked) label.gwd-sort-btn[for="gwd-wish-sort-disc"] {
+  background: #2563eb;
+  color: #fff !important;
+}
+
+.game-wishlist-dashboard .gwd-wish-pane-disc {
   display: none;
 }
 
-.game-wishlist-dashboard #gwd-wish-disc:target {
+.game-wishlist-dashboard .gwd-wish-radio-disc:checked ~ .gwd-wish-pane-price,
+.game-wishlist-dashboard .gwd-wish-block:has(.gwd-wish-radio-disc:checked) .gwd-wish-pane-price {
+  display: none;
+}
+
+.game-wishlist-dashboard .gwd-wish-radio-disc:checked ~ .gwd-wish-pane-disc,
+.game-wishlist-dashboard .gwd-wish-block:has(.gwd-wish-radio-disc:checked) .gwd-wish-pane-disc {
   display: block;
-}
-
-.game-wishlist-dashboard .gwd-root:has(#gwd-wish-disc:target) #gwd-wish-price {
-  display: none;
 }
 
 .game-wishlist-dashboard .gwd-scroller {
