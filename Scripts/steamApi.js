@@ -23,16 +23,47 @@ const REVIEW_LABELS = {
   "Overwhelmingly Negative": "Extremamente negativas",
 };
 
+const RATE_LIMIT_BACKOFF_MS = [3000, 8000, 15000];
+
+function parseRetryAfterMs(header) {
+  if (!header) return null;
+  const trimmed = String(header).trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, 60_000);
+  }
+  const when = Date.parse(trimmed);
+  if (Number.isNaN(when)) return null;
+  return Math.min(Math.max(0, when - Date.now()), 60_000);
+}
+
+function isRateLimitError(error) {
+  if (error?.status === 429) return true;
+  return /\bHTTP 429\b/i.test(String(error?.message || error || ""));
+}
+
+function httpError(status, retryAfterMs) {
+  const error = new Error(`HTTP ${status}`);
+  error.status = status;
+  if (retryAfterMs != null) error.retryAfterMs = retryAfterMs;
+  return error;
+}
+
 async function fetchJson(url, { retries = 3, timeoutMs = 25000 } = {}) {
   let lastError;
-  for (let attempt = 1; attempt <= retries; attempt += 1) {
+  let rateLimitHits = 0;
+  const maxAttempts = Math.max(retries, 1);
+  let attempt = 0;
+
+  while (true) {
+    attempt += 1;
     try {
       const response = await fetch(url, {
         headers: STEAM_HEADERS,
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.status === 429 || response.status >= 500) {
-        throw new Error(`HTTP ${response.status}`);
+        throw httpError(response.status, parseRetryAfterMs(response.headers.get("retry-after")));
       }
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} em ${url}`);
@@ -44,7 +75,22 @@ async function fetchJson(url, { retries = 3, timeoutMs = 25000 } = {}) {
       return await response.json();
     } catch (error) {
       lastError = error;
-      if (attempt < retries) await sleep(1500 * attempt);
+      const is429 = error.status === 429 || isRateLimitError(error);
+
+      if (is429) {
+        rateLimitHits += 1;
+        if (rateLimitHits > RATE_LIMIT_BACKOFF_MS.length) break;
+        const scheduled = RATE_LIMIT_BACKOFF_MS[rateLimitHits - 1];
+        const waitMs = error.retryAfterMs > 0 ? error.retryAfterMs : scheduled;
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (attempt < maxAttempts) {
+        await sleep(1500 * attempt);
+        continue;
+      }
+      break;
     }
   }
   throw lastError;
@@ -505,4 +551,5 @@ module.exports = {
   mapPool,
   capsuleUrl,
   portraitUrl,
+  isRateLimitError,
 };

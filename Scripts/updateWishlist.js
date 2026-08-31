@@ -18,7 +18,7 @@ const {
   formatBRL,
   paint,
 } = require("./config");
-const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedGames, fetchMostWanted, fetchStoreHub, mapPool } = require("./steamApi");
+const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedGames, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError } = require("./steamApi");
 const { fetchGgDealsPopular } = require("./ggDeals");
 const { loadHistory, saveHistory, migrateLegacyIfNeeded, appendDaily, summarize, colorStatus, ensureBasePrice } = require("./historyManager");
 const { fetchItadPrices } = require("./stores");
@@ -96,6 +96,32 @@ function priceUnchanged(saved, price) {
     roundMoney(saved.currentPrice) === roundMoney(price?.currentPrice) &&
     Number(saved.discount || 0) === Number(price?.discount || 0)
   );
+}
+
+function detailsFromSaved(item, saved, price) {
+  return {
+    appId: item.appId,
+    name: saved.name,
+    currentPrice: price?.currentPrice ?? saved.currentPrice,
+    initialPrice: price?.initialPrice ?? saved.initialPrice,
+    discount: price?.unavailable ? saved.discount : Number(price?.discount ?? saved.discount),
+    headerImage: saved.headerImage,
+    capsuleImage: saved.headerImage,
+    storeUrl: saved.storeUrl || `https://store.steampowered.com/app/${item.appId}`,
+    steamTags: saved.steamTags,
+    shortDescription: "",
+    developers: [],
+    publishers: [],
+    comingSoon: false,
+  };
+}
+
+function hasSavedNote(saved) {
+  return Boolean(saved?.name);
+}
+
+function priceLookedRateLimited(price) {
+  return Boolean(price?.rateLimited) || isRateLimitError(price?.error);
 }
 
 async function alreadyRanToday(cachePath, timezone) {
@@ -300,13 +326,20 @@ async function main() {
   let failed = 0;
   let skipped = 0;
   let changed = 0;
+  let recovered429 = 0;
 
+  const PRICE_CONCURRENCY = 3;
   console.log(paint("dim", `Checando ${wishlistItems.length} preços em paralelo...`));
-  const priceHits = await mapPool(wishlistItems, 8, async (item) => {
+  const priceHits = await mapPool(wishlistItems, PRICE_CONCURRENCY, async (item) => {
     try {
       return await fetchPriceOverview(item.appId, config);
     } catch (error) {
-      return { appId: item.appId, error: error.message, unavailable: true };
+      return {
+        appId: item.appId,
+        error: error.message,
+        unavailable: true,
+        rateLimited: isRateLimitError(error),
+      };
     }
   });
 
@@ -329,39 +362,50 @@ async function main() {
         bestStore: saved?.bestStore || "Steam",
         bestStorePrice: saved?.bestStorePrice ?? saved?.currentPrice,
       };
-      const reuse = priceUnchanged(saved, price);
+      let reuse = priceUnchanged(saved, price);
+      let from429 = false;
+      const known = hasSavedNote(saved);
+      const price429 = priceLookedRateLimited(price);
+
+      if (!reuse && known && (price429 || (price.unavailable && price.error))) {
+        reuse = true;
+        from429 = price429;
+      }
 
       if (reuse) {
-        details = {
-          appId: item.appId,
-          name: saved.name,
-          currentPrice: price.currentPrice ?? saved.currentPrice,
-          initialPrice: price.initialPrice ?? saved.initialPrice,
-          discount: price.unavailable ? saved.discount : Number(price.discount ?? saved.discount),
-          headerImage: saved.headerImage,
-          capsuleImage: saved.headerImage,
-          storeUrl: saved.storeUrl || `https://store.steampowered.com/app/${item.appId}`,
-          steamTags: saved.steamTags,
-          shortDescription: "",
-          developers: [],
-          publishers: [],
-          comingSoon: false,
-        };
+        details = detailsFromSaved(item, saved, from429 ? { unavailable: true } : price);
         skipped += 1;
+        if (from429) recovered429 += 1;
       } else {
-        details = await fetchAppDetails(item.appId, config);
-        if (details.currentPrice == null && saved?.currentPrice != null) {
-          details.currentPrice = saved.currentPrice;
-          details.initialPrice = saved.initialPrice ?? details.initialPrice;
-          details.discount = saved.discount;
+        try {
+          details = await fetchAppDetails(item.appId, config);
+        } catch (error) {
+          if (!known) throw error;
+          details = detailsFromSaved(item, saved, { unavailable: true });
+          reuse = true;
+          from429 = isRateLimitError(error);
+          skipped += 1;
+          if (from429) recovered429 += 1;
         }
-        reviews = await fetchReviews(item.appId);
-        stores = await fetchItadPrices(item.appId, details.name, {
-          apiKey: config.itadApiKey,
-          country: config.country.toUpperCase() === "BR" ? "BR" : config.country,
-          steamPrice: details.currentPrice,
-        });
-        changed += 1;
+
+        if (!reuse && details.unavailable && known) {
+          details = detailsFromSaved(item, saved, { unavailable: true });
+          reuse = true;
+          skipped += 1;
+        } else if (!reuse) {
+          if (details.currentPrice == null && saved?.currentPrice != null) {
+            details.currentPrice = saved.currentPrice;
+            details.initialPrice = saved.initialPrice ?? details.initialPrice;
+            details.discount = saved.discount;
+          }
+          reviews = await fetchReviews(item.appId);
+          stores = await fetchItadPrices(item.appId, details.name, {
+            apiKey: config.itadApiKey,
+            country: config.country.toUpperCase() === "BR" ? "BR" : config.country,
+            steamPrice: details.currentPrice,
+          });
+          changed += 1;
+        }
       }
 
       appendDaily(history, details, config.timezone);
@@ -404,7 +448,7 @@ async function main() {
       console.log(
         `${paint("bold", details.name)}  ${details.currentPrice == null ? "—" : formatBRL(details.currentPrice)}  ${statusPaint(stats.status)}` +
           (stats.discount ? paint("yellow", `  -${stats.discount}%`) : "") +
-          (reuse ? paint("dim", "  cache") : "")
+          (from429 ? paint("yellow", "  429 · cache") : reuse ? paint("dim", "  cache") : "")
       );
       ok += 1;
     } catch (error) {
@@ -508,7 +552,11 @@ async function main() {
 
   console.log("");
   console.log(
-    paint("cyan", `Atualizados: ${ok}  |  Iguais (cache): ${skipped}  |  Mudou/novo: ${changed}  |  Falhas: ${failed}`)
+    paint(
+      "cyan",
+      `Atualizados: ${ok}  |  Iguais (cache): ${skipped}  |  Mudou/novo: ${changed}  |  Falhas: ${failed}` +
+        (recovered429 ? `  |  429 recuperados do cache: ${recovered429}` : "")
+    )
   );
 }
 
