@@ -214,6 +214,7 @@ function parseAppDetails(appId, data) {
     publishers: data?.publishers || [],
     comingSoon: Boolean(data?.release_date?.coming_soon),
     releaseDate: String(data?.release_date?.date || "").trim(),
+    earlyAccess: [...genres, ...categories].some((tag) => /early access|acesso antecipado/i.test(tag)),
   };
 }
 
@@ -244,6 +245,7 @@ async function fetchAppDetails(appId, { country, language, retries = 0, timeoutM
       publishers: [],
       comingSoon: undefined,
       releaseDate: "",
+      earlyAccess: false,
       unavailable: true,
     };
   }
@@ -276,6 +278,47 @@ async function fetchPriceOverview(appId, { country, language }) {
     releaseDate: release?.date ? String(release.date).trim() : undefined,
     unavailable: !overview && !isFree,
   };
+}
+
+function firstLocalized(list) {
+  if (!Array.isArray(list)) return "";
+  return list.find((item) => typeof item === "string" && item.trim()) || "";
+}
+
+function partnerEventImage(event) {
+  let json = {};
+  try {
+    json = JSON.parse(event?.jsondata || "{}");
+  } catch {
+    json = {};
+  }
+  const file =
+    firstLocalized(json.localized_capsule_image) || firstLocalized(json.localized_title_image);
+  const clanId = event?.announcement_body?.clanid;
+  if (!file || !clanId) return "";
+  return `https://clan.akamai.steamstatic.com/images/${clanId}/${file}`;
+}
+
+async function fetchAppNews(appId, { count = 5 } = {}) {
+  const url = new URL("https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/");
+  url.searchParams.set("appid", String(appId));
+  url.searchParams.set("count", String(count));
+  url.searchParams.set("maxlength", "240");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("feeds", "steam_community_announcements");
+  const payload = await fetchJson(url, { retries: 0, timeoutMs: 8000 });
+  return Array.isArray(payload?.appnews?.newsitems) ? payload.appnews.newsitems : [];
+}
+
+async function fetchPartnerEvents(appId, { language = "brazilian", count = 8 } = {}) {
+  const lang = language === "portuguese" ? "brazilian" : language || "brazilian";
+  const url = new URL("https://store.steampowered.com/events/ajaxgetadjacentpartnerevents/");
+  url.searchParams.set("appid", String(appId));
+  url.searchParams.set("count_before", "0");
+  url.searchParams.set("count_after", String(count));
+  url.searchParams.set("l", lang);
+  const payload = await fetchJson(url, { retries: 0, timeoutMs: 8000 });
+  return Array.isArray(payload?.events) ? payload.events : [];
 }
 
 async function fetchReviews(appId) {
@@ -1316,6 +1359,9 @@ module.exports = {
   fetchSpecialsCatalog,
   fetchStoreHub,
   searchSteamStore,
+  fetchPartnerEvents,
+  fetchAppNews,
+  partnerEventImage,
   mapPool,
   capsuleUrl,
   portraitUrl,

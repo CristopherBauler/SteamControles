@@ -392,8 +392,9 @@ async function main() {
           }),
           onWishlist: fm.on_wishlist !== false,
           owned: Boolean(fm.owned),
-          comingSoon: fm.coming_soon == null ? null : Boolean(fm.coming_soon),
+          comingSoon: fm.coming_soon == null || fm.coming_soon === "" ? null : Boolean(fm.coming_soon),
           isFree: fm.is_free == null ? fm.current_price === 0 : Boolean(fm.is_free),
+          releaseDate: fm.release_date || "",
           storeUrl: fm.store_url,
           updatedAt: fm.updated || nowIso(),
         };
@@ -414,6 +415,9 @@ async function main() {
       paths,
       games: gamesFromNotes,
       previousWishlist: previousWish.games || [],
+      timezone: config.timezone,
+      language: config.language,
+      refreshNews: false,
     });
     await writeDashboard(gamesFromNotes, config, {
       mostWanted,
@@ -427,6 +431,13 @@ async function main() {
     const backlog = await refreshBacklog({ config, steamId64, ownedPayload });
     const wishCount = gamesFromNotes.filter((game) => game.onWishlist).length;
     console.log(paint("green", `Painel redesenhado com ${wishCount} jogos (sem reconsultar cada preço).`));
+    if (updates.newsLimited) {
+      console.log(paint("yellow", "Atualizações Steam: 429 — usando o que já estava no cache de 7 dias."));
+    } else if (updates.newsSkipped) {
+      console.log(paint("dim", `Wishlist: ${updates.events.length} atualizações em cache (7 dias).`));
+    } else {
+      console.log(paint("cyan", `Wishlist: ${updates.events.length} atualizações nos últimos 7 dias.`));
+    }
     console.log(
       paint(
         "green",
@@ -773,6 +784,9 @@ async function main() {
     paths,
     games: gamesOut,
     previousWishlist: savedWishlist.games || [],
+    timezone: config.timezone,
+    language: config.language,
+    refreshNews: true,
   });
   await writeDashboard(gamesOut, config, {
     mostWanted,
@@ -800,6 +814,11 @@ async function main() {
       `Backlog: ${backlog.open.length} na lista · Não vou jogar: ${backlog.done.length}`
     )
   );
+  if (updates.newsLimited) {
+    console.log(paint("yellow", "Atualizações Steam: 429 — usando o cache da wishlist."));
+  } else {
+    console.log(paint("cyan", `Wishlist: ${updates.events.length} atualizações nos últimos 7 dias.`));
+  }
 }
 
 main().catch((error) => {

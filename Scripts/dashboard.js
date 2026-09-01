@@ -63,11 +63,22 @@ function listTone(game) {
   return game.status || "igual";
 }
 
+function isTbaReleaseDate(date) {
+  const text = String(date || "").trim();
+  if (!text) return false;
+  return /to be announced|a ser anunciad|em breve|^tba$|coming soon|quando estiver/i.test(text);
+}
+
 function isUnreleased(game) {
+  if (isTbaReleaseDate(game.releaseDate)) return true;
   if (game.comingSoon === true) return true;
-  if (game.comingSoon === false) return false;
+  const noPrice = game.currentPrice == null;
+  if (game.comingSoon === false) {
+    if (noPrice) return true;
+    return false;
+  }
   if (Number(game.discount) > 0 && game.currentPrice > 0) return false;
-  return game.currentPrice == null || game.currentPrice === 0;
+  return noPrice || game.currentPrice === 0;
 }
 
 function priceLine(game, { soon } = {}) {
@@ -94,8 +105,11 @@ function sectionHead(title, extra = "", link = null) {
 }
 
 function wishStrip(title, extra, cardsHtml) {
-  return `${sectionHead(title, extra)}
-  ${scrollRow(cardsHtml)}`;
+  return `<div class="gwd-wish-block">
+    ${sectionHead(title, extra)}
+    <input type="search" class="gwd-name-q" placeholder="Buscar pelo nome" autocomplete="off" spellcheck="false">
+    ${scrollRow(cardsHtml)}
+  </div>`;
 }
 
 function scrollRow(cardsHtml) {
@@ -109,7 +123,8 @@ function gameCard(game, { rank, href, soon } = {}) {
     ? `<img src="${esc(img)}" alt="">`
     : `<div class="gwd-card-ph"></div>`;
   const link = href || game.storeUrl || "#";
-  return `<a class="gwd-card" href="${esc(link)}">
+  const key = String(game.name || "").toLowerCase();
+  return `<a class="gwd-card" href="${esc(link)}" data-name="${esc(key)}">
     <div class="gwd-card-art">
       ${art}
       ${rank != null ? `<span class="gwd-rank">#${rank}</span>` : ""}
@@ -181,39 +196,130 @@ function dealRow(game) {
   </a>`;
 }
 
-function updateCard(event) {
+function formatUpdWhen(iso, timezone) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(+date)) return "";
+  const day = new Intl.DateTimeFormat("pt-BR", { timeZone: timezone, day: "numeric" }).format(date);
+  const month = new Intl.DateTimeFormat("pt-BR", { timeZone: timezone, month: "long" }).format(date);
+  return `${day} DE ${month}`.toUpperCase();
+}
+
+function formatUpdDay(iso, timezone) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(+date)) return "";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timezone,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })
+    .format(date)
+    .replace(".", "")
+    .toUpperCase();
+}
+
+const UPD_KIND_LABEL = {
+  launch: "Lançamento",
+  earlyAccess: "Saiu do acesso antecipado",
+  dlc: "DLC",
+  majorUpdate: "Grande atualização",
+  update: "Atualização",
+  smallUpdate: "Pequena atualização",
+  content: "Conteúdo",
+  news: "Notícias",
+  sale: "Promoção",
+  saleOff: "Saiu de promoção",
+  price: "Preço",
+};
+
+const UPD_PATCH_KINDS = new Set(["launch", "earlyAccess", "dlc", "majorUpdate", "update", "smallUpdate", "content"]);
+const UPD_NEWS_KINDS = new Set(["news"]);
+const UPD_PROMO_KINDS = new Set(["sale", "saleOff", "price"]);
+
+function updateCard(event, timezone) {
   const img = event.headerImage
     ? `<img src="${esc(event.headerImage)}" alt="">`
-    : `<div class="gwd-upd-ph"></div>`;
-  const price =
-    event.isFree || event.price === 0
-      ? `<span class="gwd-upd-price">Free</span>`
-      : event.price != null
-        ? `<span class="gwd-upd-price">${esc(formatBRL(event.price))}</span>`
-        : "";
-  const steam = event.steamUpdate
-    ? `<div class="gwd-upd-steam">teve atualização na Steam</div>`
-    : "";
-  return `<a class="gwd-upd" href="${esc(event.storeUrl || "#")}">
-    <div class="gwd-upd-art">${img}</div>
-    <div class="gwd-upd-body">
-      <div class="gwd-upd-name">${esc(event.name)}</div>
-      <div class="gwd-upd-text">${esc(event.text)}</div>
-      ${steam}
-      ${price}
+    : `<div class="gwd-upd-ph${event.kind === "smallUpdate" ? " gwd-upd-ph-patch" : ""}"></div>`;
+  const kind = UPD_KIND_LABEL[event.kind] || "Atualização";
+  const when = formatUpdWhen(event.at, timezone || event.timezone);
+  const flag = event.featured ? `<div class="gwd-upd-flag">Destaque</div>` : "";
+  const gameName = event.name || "";
+  return `<a class="gwd-upd gwd-upd-${esc(event.kind || "news")}${event.featured ? " gwd-upd-feature" : ""}" href="${esc(event.storeUrl || "#")}">
+    ${flag}
+    <div class="gwd-upd-inner">
+      <div class="gwd-upd-art">${img}${gameName ? `<div class="gwd-upd-gametag">${esc(gameName)}</div>` : ""}</div>
+      <div class="gwd-upd-body">
+        ${gameName ? `<div class="gwd-upd-gamepill">${esc(gameName)}</div>` : ""}
+        <div class="gwd-upd-kicker">${esc(kind.toUpperCase())}${when ? ` · ${esc(when)}` : ""}</div>
+        <div class="gwd-upd-name">${esc(event.title || event.name)}</div>
+        ${event.text ? `<div class="gwd-upd-text">${esc(event.text)}</div>` : ""}
+      </div>
     </div>
   </a>`;
 }
 
-function updatesBanner(events) {
-  const list = (events || []).slice(0, 5);
-  if (!list.length) {
-    return `<div class="gwd-updates gwd-updates-quiet">Nenhuma atualização recente na wishlist.</div>`;
+function updatesColumn(title, events, timezone, empty) {
+  if (!events.length) {
+    return `<div class="gwd-updates-col">
+      <div class="gwd-updates-col-head">${esc(title)}</div>
+      <div class="gwd-updates-quiet">${esc(empty)}</div>
+    </div>`;
+  }
+  return `<div class="gwd-updates-col">
+    <div class="gwd-updates-col-head">${esc(title)} <span>${events.length}</span></div>
+    <div class="gwd-upd-day-list">${events.map((event) => updateCard(event, timezone)).join("")}</div>
+  </div>`;
+}
+
+function updatesBanner(events, timezone) {
+  const list = events || [];
+  const patches = list.filter((event) => UPD_PATCH_KINDS.has(event.kind)).slice(0, 8);
+  const news = list.filter((event) => UPD_NEWS_KINDS.has(event.kind)).slice(0, 8);
+  const promos = list.filter((event) => UPD_PROMO_KINDS.has(event.kind)).slice(0, 6);
+  if (!patches.length && !news.length && !promos.length) {
+    return `<div class="gwd-updates gwd-updates-quiet">Nenhuma atualização na wishlist nos últimos 7 dias.</div>`;
   }
   return `<div class="gwd-updates">
-    <div class="gwd-updates-head">Atualizações da wishlist</div>
-    <div class="gwd-updates-row">${list.map(updateCard).join("")}</div>
+    <div class="gwd-updates-head">Novidades da wishlist</div>
+    <div class="gwd-updates-hint">últimos 7 dias · patches à esquerda · notícias à direita · promoções embaixo</div>
+    <div class="gwd-updates-cols">
+      ${updatesColumn("Atualizações", patches, timezone, "Nenhum patch ou lançamento nesta semana.")}
+      ${updatesColumn("Notícias", news, timezone, "Nenhuma notícia nesta semana.")}
+    </div>
+    ${
+      promos.length
+        ? `<div class="gwd-updates-promo">
+      <div class="gwd-updates-col-head">Promoções <span>${promos.length}</span></div>
+      <div class="gwd-upd-day-list">${promos.map((event) => updateCard(event, timezone)).join("")}</div>
+    </div>`
+        : `<div class="gwd-updates-promo">
+      <div class="gwd-updates-col-head">Promoções</div>
+      <div class="gwd-updates-quiet">Nenhuma promoção nesta semana.</div>
+    </div>`
+    }
   </div>`;
+}
+
+function wishSearchBlock() {
+  return [
+    "```dataviewjs",
+    "for (const input of document.querySelectorAll('.gwd-name-q')) {",
+    "  if (input.dataset.gwdBound) continue;",
+    "  input.dataset.gwdBound = '1';",
+    "  input.addEventListener('input', () => {",
+    "    const q = String(input.value || '').trim().toLowerCase();",
+    "    const block = input.closest('.gwd-wish-block');",
+    "    if (!block) return;",
+    "    for (const card of block.querySelectorAll('.gwd-card')) {",
+    "      const name = String(card.getAttribute('data-name') || card.textContent || '').toLowerCase();",
+    "      card.style.display = !q || name.includes(q) ? '' : 'none';",
+    "    }",
+    "  });",
+    "}",
+    "```",
+  ].join("\n");
 }
 
 function renderDashboard(games, extra = {}) {
@@ -288,7 +394,7 @@ tags:
 ---
 
 <div class="gwd-root">
-  ${updatesBanner(wishlistUpdates)}
+  ${updatesBanner(wishlistUpdates, timezone)}
   <div class="gwd-top" title="${esc(`Atualizar abre uma janela do Windows. Depois volte aqui e pressione Ctrl+R. Protocolo steamwish. ${ownedHint}`)}">
     <div class="gwd-title">🎮 Minha Wishlist Steam</div>
     <div class="gwd-actions">
@@ -327,6 +433,8 @@ tags:
   </div>
   ${usdNote}
 </div>
+
+${wishSearchBlock()}
 `;
 }
 

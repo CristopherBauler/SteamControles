@@ -23,14 +23,19 @@
 }
 
 .game-wishlist-dashboard .gwd-updates {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
 }
 
 .game-wishlist-dashboard .gwd-updates-head {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   color: #f4f7fb;
-  margin-bottom: 8px;
+}
+
+.game-wishlist-dashboard .gwd-updates-hint {
+  margin: 2px 0 10px;
+  font-size: 11px;
+  color: #8b95a7;
 }
 
 .game-wishlist-dashboard .gwd-updates-row {
@@ -46,39 +51,225 @@
   margin: 0 0 6px;
 }
 
+.game-wishlist-dashboard .gwd-upd-day {
+  margin: 0 0 14px;
+}
+
+.game-wishlist-dashboard .gwd-upd-day-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #8b95a7;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #2b3240;
+}
+
+.game-wishlist-dashboard .gwd-upd-day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .game-wishlist-dashboard a.gwd-upd {
-  flex: 0 0 240px;
+  display: block;
   text-decoration: none !important;
   color: #e8edf4 !important;
-  background: #222a36;
-  border-radius: 12px;
+  background: #1c222c;
+  border: 1px solid #2b3240;
+  border-radius: 8px;
   overflow: hidden;
+}
+
+.game-wishlist-dashboard a.gwd-upd-feature {
+  border-color: #3d7ea6;
+  box-shadow: inset 3px 0 0 #67c1f5;
+}
+
+.game-wishlist-dashboard a.gwd-upd-majorUpdate,
+.game-wishlist-dashboard a.gwd-upd-launch,
+.game-wishlist-dashboard a.gwd-upd-dlc,
+.game-wishlist-dashboard a.gwd-upd-earlyAccess {
+  border-color: #355e7a;
+}
+
+.game-wishlist-dashboard .gwd-upd-flag {
+  background: #1a9fff;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+}
+
+.game-wishlist-dashboard .gwd-upd-inner {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  min-width: 0;
+}
+
+.game-wishlist-dashboard .gwd-wish-block {
+  min-width: 0;
+}
+
+.game-wishlist-dashboard .gwd-name-q {
+  display: block;
+  width: min(280px, 100%);
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px solid #2b3240;
+  border-radius: 8px;
+  background: #12161d;
+  color: #e8edf4;
+  font-size: 12px;
+}
+
+.game-wishlist-dashboard .gwd-name-q::placeholder {
+  color: #6b7382;
+}
+
+.game-wishlist-dashboard .gwd-name-q:focus {
+  outline: none;
+  border-color: #3d7ea6;
+}
+
+.game-wishlist-dashboard .gwd-updates-cols {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.game-wishlist-dashboard .gwd-updates-col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.game-wishlist-dashboard .gwd-updates-col-head {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f4f7fb;
+  margin: 0 0 8px;
+}
+
+.game-wishlist-dashboard .gwd-updates-col-head span {
+  color: #8b95a7;
+  font-weight: 650;
+}
+
+.game-wishlist-dashboard .gwd-updates-promo {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #2b3240;
+}
+
+.game-wishlist-dashboard .gwd-upd-art {
+  position: relative;
+  flex: 0 0 168px;
+  width: 168px;
+  background: #12161d;
+}
+
+.game-wishlist-dashboard .gwd-upd-gametag {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 16px 8px 6px;
+  background: linear-gradient(transparent, #000c 70%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.game-wishlist-dashboard .gwd-upd-gamepill {
+  display: inline-block;
+  margin: 0 0 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #163a5c;
+  color: #cfe8ff;
+  font-size: 11px;
+  font-weight: 700;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .game-wishlist-dashboard .gwd-upd-art img,
 .game-wishlist-dashboard .gwd-upd-ph {
-  width: 240px;
-  height: 112px;
+  width: 168px;
+  height: 95px;
   object-fit: cover;
   display: block;
   background: #21262d;
 }
 
+.game-wishlist-dashboard .gwd-upd-ph-patch {
+  background: linear-gradient(160deg, #2a3344 0%, #171c24 100%);
+}
+
+.game-wishlist-dashboard a.gwd-upd-smallUpdate .gwd-upd-art {
+  flex-basis: 72px;
+  width: 72px;
+}
+
+.game-wishlist-dashboard a.gwd-upd-smallUpdate .gwd-upd-art img,
+.game-wishlist-dashboard a.gwd-upd-smallUpdate .gwd-upd-ph {
+  width: 72px;
+  height: 72px;
+}
+
 .game-wishlist-dashboard .gwd-upd-body {
+  flex: 1;
+  min-width: 0;
   padding: 10px 12px 12px;
 }
 
+.game-wishlist-dashboard .gwd-upd-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #8b95a7;
+}
+
+.game-wishlist-dashboard a.gwd-upd-majorUpdate .gwd-upd-kicker,
+.game-wishlist-dashboard a.gwd-upd-launch .gwd-upd-kicker,
+.game-wishlist-dashboard a.gwd-upd-feature .gwd-upd-kicker {
+  color: #67c1f5;
+}
+
+.game-wishlist-dashboard a.gwd-upd-sale .gwd-upd-kicker {
+  color: #3dd68c;
+}
+
 .game-wishlist-dashboard .gwd-upd-name {
+  margin-top: 3px;
   font-size: 15px;
   font-weight: 700;
   line-height: 1.25;
+  color: #f4f7fb;
 }
 
 .game-wishlist-dashboard .gwd-upd-text {
   margin-top: 4px;
-  font-size: 13px;
-  color: #3dd68c;
-  font-weight: 650;
+  font-size: 12px;
+  color: #9aa3b2;
+  font-weight: 400;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.game-wishlist-dashboard .gwd-upd-game {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #6b7382;
 }
 
 .game-wishlist-dashboard .gwd-upd-steam {
@@ -175,8 +366,13 @@
 }
 
 .game-wishlist-dashboard .gwd-soon {
-  color: #8b95a7;
-  font-weight: 650;
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #163a5c;
+  color: #8ec8ff;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .game-wishlist-dashboard .gwd-scroller {
@@ -415,6 +611,13 @@
   font-size: 13px;
   font-weight: 700;
   margin-top: 2px;
+}
+
+.game-wishlist-dashboard .block-language-dataviewjs {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
 }
 
 .game-wishlist-dashboard .gwd-empty {

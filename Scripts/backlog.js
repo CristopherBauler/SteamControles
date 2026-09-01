@@ -51,6 +51,15 @@ function formatHours(hours) {
   })} h`;
 }
 
+function formatHoursPlain(hours) {
+  const n = Math.max(0, Number(hours) || 0);
+  const rounded = Math.round(n * 10) / 10;
+  return `${rounded.toLocaleString("pt-BR", {
+    minimumFractionDigits: rounded % 1 ? 1 : 0,
+    maximumFractionDigits: 1,
+  })} h`;
+}
+
 function hoursHtml(hours) {
   if (!hours || hours <= 0) {
     return `<span class="gwd-bl-never" style="color:#ff6b6b;font-weight:650">Nunca jogado</span>`;
@@ -191,9 +200,12 @@ function parseTaskLine(raw) {
   const rest = match[2];
   const appId = extractAppId(rest);
   if (!Number.isInteger(appId) || appId <= 0) return null;
-  const bold = rest.match(/\*\*(.+?)\*\*/);
+  const bold = rest.match(/<strong>(.+?)<\/strong>/i) || rest.match(/\*\*(.+?)\*\*/);
   const name = bold ? bold[1].replace(/\s*·.*$/, "").trim() : "";
-  const cover = rest.match(/<img[^>]+src="([^"]+)"/i)?.[1] || "";
+  const cover =
+    rest.match(/background-image:\s*url\((['"]?)([^'")]+)\1\)/i)?.[2] ||
+    rest.match(/<img[^>]+src="([^"]+)"/i)?.[1] ||
+    "";
   return {
     appId,
     checked: match[1].toLowerCase() === "x",
@@ -441,33 +453,31 @@ function taskRow(game, checked) {
   const art = src
     ? `<img src="${esc(src)}" alt="">`
     : `<span class="gbd-cover-empty" aria-hidden="true"></span>`;
-  return `- [${mark}] ${art} **${name}** ${hoursHtml(gameHours(game))}${familyHtml(game)} <!--app:${Number(game.appId)}-->`;
+  return `- [${mark}] ${art} <strong>${name}</strong> ${hoursHtml(gameHours(game))}${familyHtml(game)} <!--app:${Number(game.appId)}-->`;
+}
+
+function backlogTaskRow(game) {
+  const name = mdEsc(game.name || `App ${game.appId}`);
+  const src = coverUrl(game);
+  const safe = src ? String(src).replace(/'/g, "%27").replace(/"/g, "%22") : "";
+  const style = src
+    ? ` style="background-image:url('${safe}');background-size:132px 50px;background-repeat:no-repeat;background-position:left center;padding-left:142px"`
+    : "";
+  return `- [ ] <span class="gbd-item"${style}><strong>${name}</strong> ${hoursHtml(gameHours(game))}${familyHtml(game)}</span> <!--app:${Number(game.appId)}-->`;
 }
 
 function privacyMessage(payload) {
-  const lines = [];
+  const bits = [];
   const communityOk = payload?.source === "xml" || payload?.source === "api";
   if (!communityOk) {
     if (payload?.source === "local" && payload.games?.length) {
-      lines.push(
-        "Horas lidas do Steam **neste PC**. Jogos nunca abertos aqui ainda podem faltar. Perfil → Privacidade → **Detalhes dos jogos = Público** (wishlist pública não basta), ou coloque **steamWebApiKey** no config.json (https://steamcommunity.com/dev/apikey). O conectar-steam.bat só grava o SteamID, não a chave."
-      );
+      bits.push("Horas deste PC. Biblioteca/família completa: **Detalhes dos jogos = Público**.");
     } else if (!payload?.games?.length) {
-      lines.push(
-        "A Steam não entregou a biblioteca. Perfil → Privacidade → **Detalhes dos jogos = Público**, ou **steamWebApiKey** no config.json (https://steamcommunity.com/dev/apikey)."
-      );
+      bits.push("Biblioteca não veio. **Detalhes dos jogos = Público** ou chave no config.json.");
     }
   }
-  if (payload?.familyFound && !payload?.familyComplete) {
-    lines.push(
-      "Grupo **Steam Family** encontrado neste PC, mas a lista compartilhada não veio. Para os jogos da família: **Detalhes dos jogos = Público** (sua conta e/ou dos membros) e/ou **steamWebApiKey** no config.json."
-    );
-  } else if (!payload?.familyFound && !payload?.familyComplete) {
-    lines.push(
-      "Jogos do **Steam Family / Family Sharing** não foram lidos. Ative **Detalhes dos jogos = Público** e/ou uma chave em **steamWebApiKey** (https://steamcommunity.com/dev/apikey)."
-    );
-  }
-  return lines.join(" ");
+  if (!payload?.familyComplete) bits.push("Family Sharing ainda não entrou.");
+  return bits.join(" ");
 }
 
 function sourceHint(payload) {
@@ -482,9 +492,96 @@ function sourceHint(payload) {
   return bits.join(" · ");
 }
 
-function renderBacklog({ open = [], payload = {}, timezone, updatedAt }) {
+const HOUR_SHELVES = [
+  { key: "h100", tone: "green", title: "Mais de 100 h", extra: "os que mais te consumiram", test: (h) => h >= 100 },
+  { key: "h50", tone: "green", title: "50 a 100 h", extra: "já virou hábito", test: (h) => h >= 50 && h < 100 },
+  { key: "h20", tone: "green", title: "20 a 50 h", extra: "bem avançados", test: (h) => h >= 20 && h < 50 },
+  { key: "h10", tone: "green", title: "10 a 20 h", extra: "em andamento", test: (h) => h >= 10 && h < 20 },
+  { key: "h1", tone: "red", title: "Menos de 10 h", extra: "só comecei", test: (h) => h > 0 && h < 10 },
+  { key: "never", tone: "red", title: "Nunca jogado", extra: "zero horas neste PC", test: (h) => h <= 0 },
+];
+
+function groupByHours(games) {
+  return HOUR_SHELVES.map((def) => {
+    const items = games.filter((game) => def.test(gameHours(game)));
+    const hours = items.reduce((sum, game) => sum + gameHours(game), 0);
+    return { ...def, items, hours };
+  }).filter((shelf) => shelf.items.length);
+}
+
+function shelfHead(shelf) {
+  const count = `${shelf.items.length} jogo${shelf.items.length === 1 ? "" : "s"}`;
+  const hoursBit = shelf.hours > 0 ? ` · ${formatHoursPlain(shelf.hours)} no total` : "";
+  return `<div class="gbd-shelf gbd-shelf-${esc(shelf.key)}">
+  <div class="gbd-shelf-copy">
+    <div class="gbd-shelf-title">${esc(shelf.title)}</div>
+    <div class="gbd-shelf-kicker">${esc(shelf.extra)}</div>
+  </div>
+  <div class="gbd-shelf-extra">${esc(count)}${esc(hoursBit)}</div>
+</div>`;
+}
+
+function shelfHeadMd(shelf) {
+  const count = `${shelf.items.length} jogo${shelf.items.length === 1 ? "" : "s"}`;
+  const hoursBit = shelf.hours > 0 ? ` · ${formatHoursPlain(shelf.hours)} no total` : "";
+  return `**${shelf.title}** · ${shelf.extra} · ${count}${hoursBit}`;
+}
+
+function asCallout(text) {
+  return String(text)
+    .split("\n")
+    .map((line) => (line.length ? `> ${line}` : ">"))
+    .join("\n");
+}
+
+function headerCallout({ openCount, totalHours, never, payload, timezone, updatedAt }) {
   const hint = privacyMessage(payload);
-  const list = open.map((game) => taskRow(game, false)).join("\n") || "_Nenhum jogo na biblioteca ainda._";
+  const lines = [
+    `[Não vou jogar](obsidian://open?file=N%C3%A3o%20vou%20jogar) · [Wishlist](obsidian://open?file=Minha%20Wishlist%20Steam) · [Atualizar](steamwish://update) · ${badgeText(updatedAt, timezone)}`,
+    "Marque um jogo e clique **Atualizar** para mandar para **Não vou jogar**.",
+  ];
+  if (hint) lines.push(hint);
+  return `> [!info] Backlog Steam · ${openCount} jogos · ${formatHoursPlain(totalHours)} · ${never} nunca tocados\n>\n${asCallout(lines.join("\n"))}`;
+}
+
+function groupBox(tone, title, extra, shelves) {
+  if (!shelves.length) return "";
+  const kind = tone === "red" ? "danger" : "success";
+  const inner = shelves
+    .map((shelf) => `${shelfHeadMd(shelf)}\n${shelf.items.map((game) => backlogTaskRow(game)).join("\n")}`)
+    .join("\n\n");
+  return `> [!${kind}] ${title} · ${extra}\n>\n${asCallout(inner)}`;
+}
+
+function renderBacklog({ open = [], payload = {}, timezone, updatedAt }) {
+  const shelves = groupByHours(open);
+  const totalHours = open.reduce((sum, game) => sum + gameHours(game), 0);
+  const never = open.filter((game) => gameHours(game) <= 0).length;
+  const played = shelves.filter((shelf) => shelf.tone === "green");
+  const leftover = shelves.filter((shelf) => shelf.tone === "red");
+  const playedCount = played.reduce((sum, shelf) => sum + shelf.items.length, 0);
+  const leftoverCount = leftover.reduce((sum, shelf) => sum + shelf.items.length, 0);
+  const playedHours = played.reduce((sum, shelf) => sum + shelf.hours, 0);
+  const leftoverHours = leftover.reduce((sum, shelf) => sum + shelf.hours, 0);
+  const body =
+    [
+      groupBox(
+        "green",
+        "10 h ou mais",
+        `${playedCount} jogo${playedCount === 1 ? "" : "s"} · ${formatHoursPlain(playedHours)} no total`,
+        played
+      ),
+      groupBox(
+        "red",
+        "Menos de 10 h",
+        leftoverHours > 0
+          ? `${leftoverCount} jogo${leftoverCount === 1 ? "" : "s"} · ${formatHoursPlain(leftoverHours)} jogadas · ${never} nunca tocados`
+          : `${leftoverCount} jogo${leftoverCount === 1 ? "" : "s"} · ${never} nunca tocados`,
+        leftover
+      ),
+    ]
+      .filter(Boolean)
+      .join("\n\n") || "_Nenhum jogo na biblioteca ainda._";
 
   return `---
 cssclasses:
@@ -495,22 +592,16 @@ tags:
   - backlog
 ---
 
-<div class="gbd-root">
-  <div class="gbd-top">
-    <div class="gbd-title">🎮 Backlog Steam</div>
-    <div class="gbd-actions">
-      <span class="gbd-pill">${esc(badgeText(updatedAt, timezone))}</span>
-      <a class="gbd-nav" href="obsidian://open?file=N%C3%A3o%20vou%20jogar">Não vou jogar</a>
-      <a class="gbd-nav" href="obsidian://open?file=Minha%20Wishlist%20Steam">Wishlist</a>
-      <a class="gbd-update" href="steamwish://update">Atualizar</a>
-    </div>
-  </div>
-  <div class="gbd-counts">Na lista: <b>${open.length}</b></div>
-  <div class="gbd-hint">Biblioteca inteira. <b>Marque e clique Atualizar</b> (ou o botão) para mandar para <b>Não vou jogar</b>. Atualizar só adiciona compras novas — nada some por horas jogadas. ${esc(sourceHint(payload))}</div>
-  ${hint ? `<div class="gbd-warn">${esc(hint).replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")}</div>` : ""}
-</div>
+${headerCallout({
+  openCount: open.length,
+  totalHours,
+  never,
+  payload,
+  timezone,
+  updatedAt,
+})}
 
-${list}
+${body}
 `;
 }
 
