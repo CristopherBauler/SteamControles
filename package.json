@@ -1,6 +1,6 @@
 {
   "name": "steam-wishlist-dashboard",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Dashboard local da wishlist Steam (PC e Obsidian, preços em BRL).",
   "main": "desktop/main.js",
@@ -15,7 +15,9 @@
     "update:daily": "node Scripts/updateWishlist.js --daily",
     "install:scheduler": "powershell -ExecutionPolicy Bypass -File Scripts/installScheduler.ps1",
     "app": "electron .",
-    "app:build": "electron-builder --win portable"
+    "app:build": "electron-builder --win portable",
+    "mobile:sync": "npm --prefix mobile run sync",
+    "mobile:apk": "npm --prefix mobile run apk"
   },
   "devDependencies": {
     "electron": "^35.7.5",
@@ -23,7 +25,7 @@
   },
   "build": {
     "appId": "dev.steamcontroles.app",
-    "productName": "SteamControles",
+    "productName": "Minha Loja dos Desejos",
     "asar": true,
     "files": [
       "desktop/**/*",

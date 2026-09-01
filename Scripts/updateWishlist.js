@@ -18,14 +18,14 @@ const {
   formatBRL,
   paint,
 } = require("./config");
-const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedPlaytimes, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError, isForbiddenError, capsuleUrl } = require("./steamApi");
+const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedPlaytimes, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError, isForbiddenError, capsuleUrl, detectEarlyAccess } = require("./steamApi");
 const { refreshBacklog } = require("./backlog");
 const { fetchGgDealsPopular, fetchGgDealsDeals, resolveDealLists } = require("./ggDeals");
 const { collectWishlistUpdates } = require("./wishlistUpdates");
 const { loadHistory, saveHistory, migrateLegacyIfNeeded, appendDaily, summarize, colorStatus, ensureBasePrice } = require("./historyManager");
 const { fetchItadPrices } = require("./stores");
 const { loadExistingNotes, buildNote, writeGameNote } = require("./notes");
-const { writeDashboard } = require("./dashboard");
+const { writeDashboard, isUnreleased } = require("./dashboard");
 
 function hasFlag(name) {
   return process.argv.includes(name);
@@ -61,6 +61,10 @@ function savedFromNote(fm) {
   if (!fm) return null;
   const currentPrice = fm.current_price;
   const saleAmount = fm.sale_amount;
+  const steamTags = String(fm.steam_tags || "")
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
   return {
     name: fm.name,
     headerImage: fm.header_image,
@@ -70,13 +74,13 @@ function savedFromNote(fm) {
       currentPrice != null && saleAmount
         ? roundMoney(Number(currentPrice) + Number(saleAmount))
         : currentPrice,
-    steamTags: String(fm.steam_tags || "")
-      .split(",")
-      .map((tag) => tag.trim())
-      .filter(Boolean),
+    steamTags,
     reviewDesc: fm.review_desc || null,
     reviewPercent: fm.review_percent || null,
     comingSoon: Boolean(fm.coming_soon),
+    earlyAccess: detectEarlyAccess({
+      earlyAccess: fm.early_access == null || fm.early_access === "" ? undefined : Boolean(fm.early_access),
+    }),
     isFree: fm.is_free == null ? undefined : Boolean(fm.is_free),
     nuuvemUrl: fm.nuuvem_url || "",
     gmgUrl: fm.gmg_url || "",
@@ -118,13 +122,17 @@ function detailsFromSaved(item, saved, price) {
     comingSoon: price?.comingSoon != null ? Boolean(price.comingSoon) : Boolean(saved.comingSoon),
     isFree: price?.isFree != null ? Boolean(price.isFree) : Boolean(saved.isFree),
     releaseDate: price?.releaseDate || saved.releaseDate || "",
+    genres: Array.isArray(price?.genres) ? price.genres : saved.genres,
+    earlyAccess: detectEarlyAccess({
+      earlyAccess: price?.earlyAccess != null ? Boolean(price.earlyAccess) : saved.earlyAccess,
+      genres: Array.isArray(price?.genres) ? price.genres : saved.genres,
+    }),
   };
 }
 
 function maybeUnreleased(saved) {
   if (!saved) return false;
-  if (saved.comingSoon) return true;
-  return saved.currentPrice === 0 && saved.isFree !== true;
+  return isUnreleased(saved);
 }
 
 async function writeGgDealsCache(paths, storeHub, stamp) {
@@ -173,6 +181,8 @@ function detailsStub(item, saved, price) {
     comingSoon: price?.comingSoon,
     isFree: Boolean(price?.isFree),
     releaseDate: price?.releaseDate || "",
+    genres: [],
+    earlyAccess: false,
     unavailable: true,
   };
 }
@@ -454,6 +464,9 @@ async function main(options = {}) {
           onWishlist: fm.on_wishlist !== false,
           owned: Boolean(fm.owned),
           comingSoon: fm.coming_soon == null || fm.coming_soon === "" ? null : Boolean(fm.coming_soon),
+          earlyAccess: detectEarlyAccess({
+            earlyAccess: fm.early_access == null || fm.early_access === "" ? undefined : Boolean(fm.early_access),
+          }),
           isFree: fm.is_free == null ? fm.current_price === 0 : Boolean(fm.is_free),
           releaseDate: fm.release_date || "",
           storeUrl: fm.store_url,
@@ -632,7 +645,7 @@ async function main(options = {}) {
         !price429 &&
         !price403 &&
         !steamLimit.tripped &&
-        maybeUnreleased(saved)
+        (maybeUnreleased(saved) || detectEarlyAccess(saved))
       ) {
         reuse = false;
       }
@@ -655,6 +668,10 @@ async function main(options = {}) {
               details.headerImage = fresh.headerImage;
               details.capsuleImage = fresh.capsuleImage || fresh.headerImage;
               headerUpgraded = true;
+            }
+            if (fresh && !fresh.unavailable) {
+              details.earlyAccess = Boolean(fresh.earlyAccess);
+              if (Array.isArray(fresh.genres)) details.genres = fresh.genres;
             }
           } catch (error) {
             if (isRateLimitError(error)) {
@@ -832,6 +849,8 @@ async function main(options = {}) {
       comingSoon: Boolean(game.comingSoon),
       isFree: Boolean(game.isFree || game.currentPrice === 0),
       releaseDate: game.releaseDate || "",
+      genres: Array.isArray(game.genres) ? game.genres : undefined,
+      earlyAccess: Boolean(game.earlyAccess),
       updatedAt: game.updatedAt,
     })),
   });

@@ -2,10 +2,12 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, Notification, shel
 const path = require("path");
 const fs = require("fs");
 
+const APP_TITLE = "Minha Loja dos Desejos";
+
 // AUMID must be set before any window is created so Windows groups/pins
-// SteamControles instead of electron.exe / Windows Script Host.
+// this app instead of electron.exe / Windows Script Host.
 app.setAppUserModelId("dev.steamcontroles.app");
-app.setName("SteamControles");
+app.setName(APP_TITLE);
 
 process.env.STEAM_CONTROLES_HOME = app.isPackaged
   ? app.getPath("userData")
@@ -15,10 +17,14 @@ const { loadConfig, readJson, writeJson, CONFIG_PATH, DEFAULT_CONFIG, normalizeT
 const { run } = require("../Scripts/updateWishlist");
 const { loginWithSteam } = require("../Scripts/steamLogin");
 const { isUnreleased, updatesBanner, storePageHtml } = require("../Scripts/dashboard");
+const { detectEarlyAccess } = require("../Scripts/steamApi");
 const { loadLibraryLists, toggleSkipped } = require("../Scripts/backlog");
+const { startPhoneLink, stopPhoneLink, restorePhoneLink, getPhoneLinkStatus } = require("./phoneLink");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const APP_AUMID = "dev.steamcontroles.app";
+const APP_VERSION = require("../package.json").version;
+const APK_RELEASES_URL = "https://github.com/CristopherBauler/SteamControles/releases";
 
 const HOUR_MS = 60 * 60 * 1000;
 let mainWindow = null;
@@ -233,7 +239,7 @@ function writeAppShortcut(filePath, spec) {
     target: spec.target,
     cwd: spec.cwd,
     args: spec.args || "",
-    description: "SteamControles",
+    description: APP_TITLE,
     iconIndex: 0,
     appUserModelId: APP_AUMID,
   };
@@ -246,18 +252,30 @@ async function createAppShortcuts() {
   if (!spec.target || !fs.existsSync(spec.target)) {
     return {
       ok: false,
-      message: "Não achei o SteamControles.exe nem o launcher. Rode npm run app:build ou npm install.",
+      message: `Não achei o SteamControles.exe nem o launcher. Rode npm run app:build ou npm install.`,
     };
   }
-  const desktop = path.join(app.getPath("desktop"), "SteamControles.lnk");
+  const desktop = path.join(app.getPath("desktop"), `${APP_TITLE}.lnk`);
   const startMenu = path.join(
     app.getPath("appData"),
     "Microsoft",
     "Windows",
     "Start Menu",
     "Programs",
-    "SteamControles.lnk"
+    `${APP_TITLE}.lnk`
   );
+  try {
+    fs.unlinkSync(path.join(app.getPath("desktop"), "SteamControles.lnk"));
+  } catch {
+    // old shortcut already gone
+  }
+  try {
+    fs.unlinkSync(
+      path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "SteamControles.lnk")
+    );
+  } catch {
+    // old shortcut already gone
+  }
   const desktopOk = writeAppShortcut(desktop, spec);
   const startOk = writeAppShortcut(startMenu, spec);
   if (!desktopOk && !startOk) {
@@ -271,7 +289,7 @@ async function createAppShortcuts() {
     desktop: desktopOk ? desktop : "",
     startMenu: startOk ? startMenu : "",
     target: spec.target,
-    message: `Atalho criado em ${bits.join(" e ")}. Fixe o atalho SteamControles — não o electron.exe nem o .vbs.`,
+    message: `Atalho criado em ${bits.join(" e ")}. Fixe o atalho ${APP_TITLE} — não o electron.exe nem o .vbs.`,
   };
 }
 
@@ -284,13 +302,27 @@ function bindWindowIcon(win) {
   win.once("ready-to-show", apply);
 }
 
+function applyWindowTitle(win) {
+  if (!win || win.isDestroyed()) return;
+  win.setTitle(APP_TITLE);
+}
+
+function bindWindowTitle(win) {
+  applyWindowTitle(win);
+  win.webContents.on("did-finish-load", () => applyWindowTitle(win));
+  win.on("page-title-updated", (event) => {
+    event.preventDefault();
+    applyWindowTitle(win);
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
     minWidth: 360,
     minHeight: 480,
-    title: "SteamControles",
+    title: APP_TITLE,
     show: !process.argv.includes("--hidden"),
     backgroundColor: "#12161d",
     autoHideMenuBar: true,
@@ -301,8 +333,9 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-  mainWindow.setTitle("SteamControles");
+  mainWindow.setTitle(APP_TITLE);
   bindWindowIcon(mainWindow);
+  bindWindowTitle(mainWindow);
   try {
     const spec = shortcutSpec();
     const relaunch = spec.target
@@ -317,13 +350,15 @@ function createWindow() {
         appIconPath: ico,
         appIconIndex: 0,
         relaunchCommand: relaunch,
-        relaunchDisplayName: "SteamControles",
+        relaunchDisplayName: APP_TITLE,
       });
     }
   } catch {
     // setAppDetails is Windows-only
   }
-  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html")).then(() => {
+    applyWindowTitle(mainWindow);
+  });
   mainWindow.on("close", (event) => {
     if (!app.isQuiting) {
       event.preventDefault();
@@ -348,14 +383,14 @@ function createTray() {
 function updateTrayTooltip() {
   if (!tray || tray.isDestroyed()) return;
   if (syncing && syncProgress && Number.isFinite(Number(syncProgress.percent))) {
-    tray.setToolTip(`SteamControles · ${syncProgress.percent}%`);
+    tray.setToolTip(`${APP_TITLE} · ${syncProgress.percent}%`);
     return;
   }
   if (syncing) {
-    tray.setToolTip("SteamControles · sincronizando");
+    tray.setToolTip(`${APP_TITLE} · sincronizando`);
     return;
   }
-  tray.setToolTip("SteamControles");
+  tray.setToolTip(APP_TITLE);
 }
 
 function rebuildTray() {
@@ -366,7 +401,7 @@ function rebuildTray() {
     : "Sync automático 12 h";
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Abrir SteamControles", click: showWindow },
+      { label: `Abrir ${APP_TITLE}`, click: showWindow },
       { label: syncing ? "Sincronizando…" : "Atualizar agora", enabled: !syncing, click: () => syncNow({ manual: true }) },
       { label: next, enabled: false },
       { type: "separator" },
@@ -410,12 +445,14 @@ async function getState() {
       releaseDate: game.releaseDate || "",
       isFree: Boolean(game.isFree),
       unreleased,
+      earlyAccess: detectEarlyAccess(game),
       priceLabel: formatBRL(game.currentPrice),
     };
   });
   const comingCount = wishAll.filter((game) => game.unreleased).length;
   const saleCount = wishAll.filter((game) => !game.unreleased && Number(game.discount) > 0).length;
   const fullCount = wishAll.filter((game) => !game.unreleased && !Number(game.discount)).length;
+  const aaCount = wishAll.filter((game) => game.earlyAccess).length;
   return {
     steamId: config.steamId,
     profileUrl: config.profileUrl,
@@ -427,6 +464,8 @@ async function getState() {
     notifyNews: config.notifyNews,
     theme: normalizeTheme(config.theme),
     timezone: config.timezone || "America/Sao_Paulo",
+    appVersion: APP_VERSION,
+    apkUrl: APK_RELEASES_URL,
     syncing,
     syncPercent: syncing ? syncProgress?.percent ?? 0 : null,
     syncLabel: syncing ? syncProgress?.label || "" : "",
@@ -438,6 +477,7 @@ async function getState() {
     onSale: saleCount,
     comingCount,
     fullCount,
+    aaCount,
     backlogOpen: library.open.length,
     backlogDone: library.done.length,
     libraryGames: library.open,
@@ -454,13 +494,35 @@ async function getState() {
   };
 }
 
+async function getStateForPhone() {
+  const state = await getState();
+  return {
+    ...state,
+    steamWebApiKey: "",
+    hasApiKey: false,
+    dataPath: "",
+    packaged: undefined,
+    fromPc: true,
+  };
+}
+
+async function applyPhoneSkip(appId, skipped) {
+  const config = await loadConfig();
+  await toggleSkipped(config, appId, skipped);
+  const state = await getState();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("sync-status", { syncing: false, state });
+  }
+  return state;
+}
+
 async function saveSettings(partial) {
   const current = await readJson(CONFIG_PATH, { ...DEFAULT_CONFIG });
   const next = { ...DEFAULT_CONFIG, ...current };
   if (partial.steamId != null) {
     next.steamId = String(partial.steamId).trim();
-    if (next.steamId && !next.profileUrl) {
-      next.profileUrl = `https://steamcommunity.com/profiles/${next.steamId}`;
+    if (partial.profileUrl == null) {
+      next.profileUrl = next.steamId ? `https://steamcommunity.com/profiles/${next.steamId}` : "";
     }
   }
   if (partial.profileUrl != null) next.profileUrl = String(partial.profileUrl).trim();
@@ -517,21 +579,21 @@ function notifySync(config, result) {
   const news = (result.events || []).filter((event) => event.kind === "news");
   if (config.notifySales && sales.length) {
     new Notification({
-      title: "SteamControles",
+      title: APP_TITLE,
       body: `${sales.length} promoção(ões) na wishlist.`,
     }).show();
     return;
   }
   if (config.notifyNews && news.length) {
     new Notification({
-      title: "SteamControles",
+      title: APP_TITLE,
       body: `${news.length} notícia(s) da wishlist nos últimos 7 dias.`,
     }).show();
     return;
   }
   if (result.freshCount) {
     new Notification({
-      title: "SteamControles",
+      title: APP_TITLE,
       body: `Wishlist atualizada · ${result.wishCount || 0} jogos.`,
     }).show();
   }
@@ -558,7 +620,7 @@ async function syncNow({ manual } = {}) {
     if (!manual) notifySync(config, result);
     else {
       new Notification({
-        title: "SteamControles",
+        title: APP_TITLE,
         body: `Atualizado · ${result.wishCount || 0} jogos na wishlist.`,
       }).show();
     }
@@ -570,7 +632,7 @@ async function syncNow({ manual } = {}) {
   } catch (error) {
     const message = error.stack || error.message || String(error);
     if (mainWindow) mainWindow.webContents.send("sync-status", { syncing: false, error: message });
-    new Notification({ title: "SteamControles", body: "A sincronização falhou. Abra o app para ver o erro." }).show();
+    new Notification({ title: APP_TITLE, body: "A sincronização falhou. Abra o app para ver o erro." }).show();
     return { ok: false, message };
   } finally {
     syncing = false;
@@ -615,6 +677,7 @@ ipcMain.handle("steam-login", async () => {
   const steamId = await loginWithSteam();
   return saveSettings({ steamId });
 });
+ipcMain.handle("logout", () => saveSettings({ steamId: "", profileUrl: "" }));
 ipcMain.handle("sync-now", () => syncNow({ manual: true }));
 ipcMain.handle("toggle-skipped", async (_event, payload = {}) => {
   const config = await loadConfig();
@@ -624,7 +687,7 @@ ipcMain.handle("toggle-skipped", async (_event, payload = {}) => {
 ipcMain.handle("create-shortcuts", () => createAppShortcuts());
 ipcMain.handle("pick-icon", async () => {
   const result = await dialog.showOpenDialog(mainWindow || undefined, {
-    title: "Escolher ícone do SteamControles",
+    title: `Escolher ícone de ${APP_TITLE}`,
     properties: ["openFile"],
     filters: [{ name: "Imagens", extensions: ["png", "jpg", "jpeg", "webp", "ico"] }],
   });
@@ -637,6 +700,9 @@ ipcMain.handle("pick-icon", async () => {
     return { ok: false, message: error.message || String(error) };
   }
 });
+ipcMain.handle("phone-link-status", () => getPhoneLinkStatus());
+ipcMain.handle("phone-link-start", () => startPhoneLink(getStateForPhone, applyPhoneSkip));
+ipcMain.handle("phone-link-stop", () => stopPhoneLink());
 ipcMain.handle("reset-icon", async () => {
   const fallback = iconFiles().fallback;
   if (!fs.existsSync(fallback)) {
@@ -668,6 +734,7 @@ if (!gotLock) {
     const config = await loadConfig();
     applyOpenAtLogin(config.startWithWindows);
     scheduleSync(config.syncEveryHours);
+    restorePhoneLink(getStateForPhone, applyPhoneSkip).catch(() => {});
     if (config.steamId || config.profileUrl) {
       setTimeout(() => syncNow({ manual: false }).catch(() => {}), 8000);
     }

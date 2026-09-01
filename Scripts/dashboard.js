@@ -69,16 +69,44 @@ function isTbaReleaseDate(date) {
   return /to be announced|a ser anunciad|em breve|^tba$|coming soon|quando estiver/i.test(text);
 }
 
+function storeAmount(game) {
+  if (game?.currentPrice != null && game.currentPrice !== "") {
+    const n = Number(game.currentPrice);
+    if (Number.isFinite(n)) return n;
+  }
+  const label = String(game?.priceLabel || "").trim();
+  if (!label || label === "—") return null;
+  if (/^free$/i.test(label)) return 0;
+  if (/^em breve$/i.test(label) || /^tba$/i.test(label)) return null;
+  const brl = label.match(/(\d{1,3}(?:\.\d{3})*|\d+),(\d{2})/);
+  if (brl) {
+    const n = Number(`${brl[1].replace(/\./g, "")}.${brl[2]}`);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 function isUnreleased(game) {
-  if (isTbaReleaseDate(game.releaseDate)) return true;
-  if (game.comingSoon === true) return true;
-  const noPrice = game.currentPrice == null;
-  if (game.comingSoon === false) {
-    if (noPrice) return true;
+  const amount = storeAmount(game);
+  if (amount != null && amount > 0) return false;
+  if (game?.comingSoon === false) {
+    if (amount == null) return true;
     return false;
   }
-  if (Number(game.discount) > 0 && game.currentPrice > 0) return false;
-  return noPrice || game.currentPrice === 0;
+  if (isTbaReleaseDate(game?.releaseDate)) return true;
+  if (game?.comingSoon === true) return true;
+  return amount == null || amount === 0;
+}
+
+function byNamePt(a, b) {
+  return String(a.name || "").localeCompare(String(b.name || ""), "pt", { sensitivity: "base" });
+}
+
+function byPriceAsc(a, b) {
+  const pa = Number(a.currentPrice ?? Infinity);
+  const pb = Number(b.currentPrice ?? Infinity);
+  if (pa !== pb) return pa - pb;
+  return Number(b.discount || 0) - Number(a.discount || 0);
 }
 
 function priceLine(game, { soon } = {}) {
@@ -386,17 +414,13 @@ function renderDashboard(games, extra = {}) {
   } = extra;
 
   const wishAll = [...games].filter((game) => game.onWishlist !== false);
-  const coming = wishAll.filter(isUnreleased).sort((a, b) => String(a.name).localeCompare(String(b.name), "pt"));
+  const coming = wishAll.filter(isUnreleased).sort(byNamePt);
   const onSale = wishAll
     .filter((game) => !isUnreleased(game) && Number(game.discount) > 0)
-    .sort((a, b) => {
-      const dd = Number(b.discount || 0) - Number(a.discount || 0);
-      if (dd) return dd;
-      return Number(a.currentPrice ?? Infinity) - Number(b.currentPrice ?? Infinity);
-    });
+    .sort(byPriceAsc);
   const fullPrice = wishAll
     .filter((game) => !isUnreleased(game) && !Number(game.discount))
-    .sort((a, b) => Number(a.currentPrice ?? Infinity) - Number(b.currentPrice ?? Infinity));
+    .sort(byPriceAsc);
 
   const comingCards = coming.map((game, i) => gameCard(game, { rank: i + 1, href: game.storeUrl, soon: true })).join("");
   const saleCards = onSale.map((game, i) => gameCard(game, { rank: i + 1, href: game.storeUrl })).join("");
@@ -459,7 +483,7 @@ tags:
 
   <div class="gwd-wish-strips">
     ${wishStrip("Ainda não lançou", `${coming.length} jogos · sem preço de verdade`, comingCards)}
-    ${wishStrip("Em promoção", `${onSale.length} jogos · maior desconto na frente`, saleCards)}
+    ${wishStrip("Em promoção", `${onSale.length} jogos · menor preço na frente`, saleCards)}
     ${wishStrip("Preço normal", `${fullPrice.length} jogos · menor preço na frente`, fullCards)}
   </div>
 

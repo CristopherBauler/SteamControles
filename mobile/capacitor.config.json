@@ -1,0 +1,39 @@
+{
+  "appId": "dev.steamcontroles.app",
+  "appName": "Minha Loja dos Desejos",
+  "webDir": "../desktop/renderer",
+  "server": {
+    "hostname": "localhost",
+    "androidScheme": "http",
+    "allowNavigation": [
+      "steamcommunity.com",
+      "*.steamcommunity.com",
+      "steampowered.com",
+      "*.steampowered.com",
+      "login.steampowered.com",
+      "store.steampowered.com"
+    ]
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "SplashScreen": {
+      "launchShowDuration": 400,
+      "launchAutoHide": true,
+      "backgroundColor": "#12161d",
+      "androidSplashResourceName": "splash",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#12161d"
+    }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "webContentsDebuggingEnabled": true,
+    "backgroundColor": "#12161d",
+    "overrideUserAgent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+  }
+}

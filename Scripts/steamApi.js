@@ -198,6 +198,34 @@ function capsuleUrl(appId) {
   return `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`;
 }
 
+const EARLY_ACCESS_GENRE_ID = "70";
+const EARLY_ACCESS_TEXT = /early access|acesso antecipado/i;
+
+function genreLooksEarlyAccess(item) {
+  if (item == null || item === false) return false;
+  if (typeof item === "string" || typeof item === "number") {
+    const text = String(item).trim();
+    return text === EARLY_ACCESS_GENRE_ID || EARLY_ACCESS_TEXT.test(text);
+  }
+  if (typeof item === "object") {
+    const id = String(item.id ?? item.genreid ?? "");
+    if (id === EARLY_ACCESS_GENRE_ID) return true;
+    return EARLY_ACCESS_TEXT.test(String(item.description || "").trim());
+  }
+  return false;
+}
+
+function detectEarlyAccess(data) {
+  if (!data || typeof data !== "object") return false;
+  // Gênero 70 da Steam é a fonte. Tags/categorias "Early Access" ficam depois que o jogo sai do AA.
+  if (Array.isArray(data.genres)) {
+    return data.genres.some(genreLooksEarlyAccess);
+  }
+  if (data.earlyAccess === true) return true;
+  if (data.earlyAccess === false) return false;
+  return false;
+}
+
 function parseAppDetails(appId, data) {
   const overview = data?.price_overview;
   const isFree = Boolean(data?.is_free);
@@ -223,7 +251,8 @@ function parseAppDetails(appId, data) {
     publishers: data?.publishers || [],
     comingSoon: Boolean(data?.release_date?.coming_soon),
     releaseDate: String(data?.release_date?.date || "").trim(),
-    earlyAccess: [...genres, ...categories].some((tag) => /early access|acesso antecipado/i.test(tag)),
+    genres: Array.isArray(data?.genres) ? data.genres : [],
+    earlyAccess: detectEarlyAccess(data),
   };
 }
 
@@ -254,6 +283,7 @@ async function fetchAppDetails(appId, { country, language, retries = 0, timeoutM
       publishers: [],
       comingSoon: undefined,
       releaseDate: "",
+      genres: [],
       earlyAccess: false,
       unavailable: true,
     };
@@ -285,6 +315,7 @@ async function fetchPriceOverview(appId, { country, language }) {
     isFree,
     comingSoon: release ? Boolean(release.coming_soon) : undefined,
     releaseDate: release?.date ? String(release.date).trim() : undefined,
+    earlyAccess: Array.isArray(data.genres) ? detectEarlyAccess(data) : undefined,
     unavailable: !overview && !isFree,
   };
 }
@@ -1374,6 +1405,7 @@ module.exports = {
   mapPool,
   capsuleUrl,
   portraitUrl,
+  detectEarlyAccess,
   isRateLimitError,
   isForbiddenError,
 };

@@ -1,4 +1,4 @@
-# SteamControles
+# Minha Loja dos Desejos
 
 Controlador de valores da Steam: vê os preços da sua wishlist e dos jogos mais populares do momento no gg.deals e na Steam.
 
@@ -25,7 +25,7 @@ npm run app:build
 
 O arquivo fica em `dist/SteamControles.exe`. A outra pessoa **não precisa do Node nem do Obsidian**: abre o exe, clica **Entrar com Steam** (wishlist **pública**) e, se quiser o backlog da família, cola a chave em https://steamcommunity.com/dev/apikey. Os dados dela ficam em `%AppData%\SteamControles`.
 
-Para abrir no dia a dia (pasta do projeto): `SteamControles.vbs` (sem janela de CMD), `SteamControles.cmd` / `SteamControles.bat`, ou `npm run app`. **Não fixe** o `.vbs` nem o `electron.exe` na barra — o Windows mostra “Windows Script Host” ou a tela genérica do Electron. No app, **Ajustes → Criar atalho na barra / área de trabalho**, depois fixe o atalho **SteamControles**. Depois do `npm run app:build`, o alvo certo é `dist/SteamControles.exe`.
+Para abrir no dia a dia (pasta do projeto): `SteamControles.vbs` (sem janela de CMD), `SteamControles.cmd` / `SteamControles.bat`, ou `npm run app`. **Não fixe** o `.vbs` nem o `electron.exe` na barra — o Windows mostra “Windows Script Host” ou a tela genérica do Electron. No app, **Ajustes → Criar atalho na barra / área de trabalho**, depois fixe o atalho **Minha Loja dos Desejos**. Depois do `npm run app:build`, o alvo certo é `dist/SteamControles.exe`.
 
 ## Requisitos
 

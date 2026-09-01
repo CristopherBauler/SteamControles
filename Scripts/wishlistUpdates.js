@@ -5,7 +5,7 @@
  */
 
 const { readJson, writeJson, nowIso, formatBRL, roundMoney } = require("./config");
-const { fetchPartnerEvents, fetchAppNews, partnerEventImage, mapPool, isRateLimitError } = require("./steamApi");
+const { fetchPartnerEvents, fetchAppNews, partnerEventImage, mapPool, isRateLimitError, detectEarlyAccess } = require("./steamApi");
 
 const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const NEWS_STALE_MS = 4 * 60 * 60 * 1000;
@@ -47,11 +47,7 @@ function comingSoonFlag(game) {
 }
 
 function hasEarlyAccess(game) {
-  if (game?.earlyAccess === true) return true;
-  if (game?.earlyAccess === false) return false;
-  const tags = game?.steamTags || game?.steam_tags || [];
-  const list = Array.isArray(tags) ? tags : String(tags).split(",");
-  return list.some((tag) => /early access|acesso antecipado/i.test(String(tag)));
+  return detectEarlyAccess(game);
 }
 
 function isTbaReleaseDate(date) {
@@ -290,7 +286,6 @@ async function collectWishlistUpdates({
     const prev = lastSeen[String(curr.appId)] || wishMap.get(curr.appId) || null;
     if (curr.comingSoon == null && prev?.comingSoon != null) curr.comingSoon = prev.comingSoon;
     if (!curr.releaseDate && prev?.releaseDate) curr.releaseDate = prev.releaseDate;
-    if (prev && prev.earlyAccess && curr.earlyAccess == null) curr.earlyAccess = prev.earlyAccess;
     wishNow.push(curr);
     if (prev) {
       const event = detectEvent(prev, curr);

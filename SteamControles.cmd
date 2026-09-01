@@ -1,5 +1,5 @@
 @echo off
-rem Launcher do SteamControles. Nao fixe o electron.exe na barra —
+rem Launcher de Minha Loja dos Desejos. Nao fixe o electron.exe na barra —
 rem fixe dist\SteamControles.exe ou o atalho criado pelo app.
 cd /d "%~dp0"
 set "ROOT=%~dp0"

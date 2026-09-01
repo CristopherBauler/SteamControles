@@ -1,6 +1,6 @@
 ' SteamControles.vbs — launcher silencioso (sem janela de CMD).
 ' Nao fixe este .vbs na barra: o Windows mostra "Windows Script Host".
-' Use o atalho SteamControles.lnk (botao no app) ou dist\SteamControles.exe.
+' Use o atalho Minha Loja dos Desejos.lnk (botao no app) ou dist\SteamControles.exe.
 
 Option Explicit
 Dim fso, sh, root, electron, distExe

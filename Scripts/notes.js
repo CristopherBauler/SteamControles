@@ -155,6 +155,7 @@ function buildNote(game, { previousFileName, userNotes }) {
     `owned: ${yamlScalar(Boolean(game.owned))}`,
     `on_sale: ${yamlScalar(game.onSale)}`,
     `coming_soon: ${game.comingSoon == null ? "" : yamlScalar(Boolean(game.comingSoon))}`,
+    `early_access: ${yamlScalar(Boolean(game.earlyAccess))}`,
     `release_date: ${yamlScalar(game.releaseDate || "")}`,
     `is_free: ${yamlScalar(Boolean(game.isFree || game.currentPrice === 0))}`,
     `review_desc: ${yamlScalar(game.reviewDesc)}`,

@@ -3,14 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>SteamControles</title>
+  <meta name="theme-color" content="#12161d">
+  <meta name="color-scheme" content="dark">
+  <title>Minha Loja dos Desejos</title>
   <link rel="stylesheet" href="game-wishlist-dashboard.css">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
   <header class="top">
     <div>
-      <h1>SteamControles</h1>
+      <h1>Minha Loja dos Desejos</h1>
       <p class="sub" id="statusLine">Carregando…</p>
     </div>
     <div class="actions">
@@ -27,6 +29,7 @@
   <section id="setup" class="card setup hidden">
     <h2>Conectar Steam</h2>
     <p>A wishlist precisa estar <b>pública</b>. A senha fica só na Steam.</p>
+    <p class="mobile-only">No celular, <b>Entrar com Steam</b> abre o login oficial (OpenID) da Valve neste app. Depois volte sozinho. Se aparecer <b>Acesso negado</b> ou o redirect falhar, cole o SteamID64 abaixo.</p>
     <div class="row">
       <button type="button" id="btnLogin">Entrar com Steam</button>
     </div>
@@ -70,6 +73,10 @@
           <b id="fullCount">0</b>
           <span>Preço normal</span>
         </button>
+        <button type="button" class="stat stat-aa" data-filter="aa" title="Acesso Antecipado">
+          <b id="aaCount">0</b>
+          <span>AA</span>
+        </button>
       </div>
       <input id="search" type="search" placeholder="Buscar pelo nome" autocomplete="off" spellcheck="false">
       <p class="filter-hint" id="wishHint"></p>
@@ -106,15 +113,45 @@
         <h2 id="settingsTitle">Ajustes</h2>
         <button type="button" class="icon" id="btnCloseSettings" aria-label="Fechar">×</button>
       </div>
-      <label>Sincronizar a cada
+      <p class="hint mobile-only">No celular não há sincronização automática de 12 h (isso é do PC). Use <b>Atualizar agora</b>.</p>
+      <div class="account-box mobile-only" id="pcLinkBox">
+        <p class="account-status" id="pcLinkStatus">Sem vínculo com o PC</p>
+        <p class="hint">No PC: Ajustes → Conectar celular → anote o IP e o código. No telefone (mesmo Wi‑Fi): cole os dois <b>uma vez</b>. O código fica salvo. Depois é só <b>Atualizar agora</b> nos dois — Jogos, backlog e AA iguais, sem colar de novo.</p>
+        <label>IP do PC
+          <input id="pcHostInput" placeholder="192.168.0.10" inputmode="decimal" autocomplete="off" spellcheck="false">
+        </label>
+        <label>Código (só no pareamento)
+          <input id="pcCodeInput" placeholder="já salvo depois de conectar" inputmode="numeric" maxlength="8" autocomplete="off">
+        </label>
+        <button type="button" id="btnPcConnect">Conectar</button>
+        <button type="button" class="ghost" id="btnPcDisconnect">Desconectar do PC</button>
+        <p class="hint" id="pcLinkMsg"></p>
+      </div>
+      <div class="account-box">
+        <p class="account-status" id="accountStatus">Não conectado</p>
+        <button type="button" id="btnSteamLogin">Iniciar sessão</button>
+        <button type="button" class="ghost" id="btnLogout">Sair da conta</button>
+        <p class="hint account-hint">A wishlist precisa estar <b>pública</b>. gg.deals é scrape público — não precisa de conta.</p>
+      </div>
+      <div class="account-box pc-only" id="phoneLinkBox">
+        <p class="account-status">Conectar celular</p>
+        <p class="hint">Ligue uma vez e deixe assim (vale na bandeja). O celular cola IP e código só no pareamento; depois é <b>Atualizar agora</b> nos dois. Encerrar gera código novo.</p>
+        <button type="button" id="btnPhoneLinkOn">Conectar celular</button>
+        <button type="button" class="ghost" id="btnPhoneLinkOff">Encerrar conexão do celular</button>
+        <p class="pair-code hidden" id="phoneLinkCode"></p>
+        <p class="hint pair-url hidden" id="phoneLinkUrl"></p>
+        <img class="pair-qr hidden" id="phoneLinkQr" alt="QR para parear" width="160" height="160">
+        <p class="hint" id="phoneLinkHint"></p>
+      </div>
+      <label class="pc-only">Sincronizar a cada
         <select id="hours">
           <option value="6">6 horas</option>
           <option value="12" selected>12 horas</option>
           <option value="24">24 horas</option>
         </select>
       </label>
-      <label class="check"><input type="checkbox" id="notifySales" checked> Avisar promoções</label>
-      <label class="check"><input type="checkbox" id="notifyNews" checked> Avisar notícias</label>
+      <label class="check pc-only"><input type="checkbox" id="notifySales" checked> Avisar promoções</label>
+      <label class="check pc-only"><input type="checkbox" id="notifyNews" checked> Avisar notícias</label>
       <label class="check desktop-only"><input type="checkbox" id="startWin" checked> Abrir com o Windows</label>
       <div class="color-head">
         <p class="hint">Cores</p>
@@ -133,8 +170,8 @@
         <input id="apiKeyDash" type="password" placeholder="em branco = não muda">
       </label>
       <button type="button" id="btnSaveSettings">Salvar</button>
-      <p class="hint">Ícone do app, da bandeja e do atalho</p>
-      <div class="icon-row">
+      <p class="hint desktop-only">Ícone do app, da bandeja e do atalho</p>
+      <div class="icon-row desktop-only">
         <img id="iconPreview" src="../icon.png" alt="Ícone atual" width="40" height="40">
         <div class="stack">
           <button type="button" class="ghost" id="btnPickIcon">Escolher minha imagem</button>
@@ -142,14 +179,20 @@
         </div>
       </div>
       <p class="hint" id="iconMsg"></p>
-      <p class="hint desktop-only">Para a barra de tarefas, crie o atalho e fixe <b>SteamControles</b> — não o electron.exe.</p>
+      <p class="hint desktop-only">Para a barra de tarefas, crie o atalho e fixe <b>Minha Loja dos Desejos</b> — não o electron.exe.</p>
       <button type="button" class="ghost desktop-only" id="btnShortcut">Criar atalho na área de trabalho</button>
       <p class="hint desktop-only" id="shortcutMsg"></p>
       <p class="hint" id="dataPath"></p>
+      <div class="version-box">
+        <p class="hint" id="appVersionLine">Versão</p>
+        <button type="button" class="ghost mobile-only" id="btnDownloadApk">Baixar APK</button>
+        <p class="hint mobile-only">git push não atualiza o APK instalado. Instale de novo o arquivo gerado em <code>mobile/MinhaLojaDosDesejos-debug.apk</code> ou o release no GitHub.</p>
+      </div>
     </div>
   </div>
 
   <p id="error" class="error hidden"></p>
+  <script src="steamApp.mobile.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
