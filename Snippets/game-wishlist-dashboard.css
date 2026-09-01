@@ -641,6 +641,14 @@
   margin-top: 22px;
 }
 
+@media (max-width: 720px) {
+  .game-wishlist-dashboard .gwd-deals-cols,
+  .game-wishlist-dashboard .gwd-updates-cols {
+    flex-direction: column;
+    flex-wrap: wrap;
+  }
+}
+
 .game-wishlist-dashboard a.gwd-seclink {
   color: #7eb6ff !important;
   text-decoration: none !important;

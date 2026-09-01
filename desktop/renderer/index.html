@@ -2,6 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>SteamControles</title>
   <link rel="stylesheet" href="game-wishlist-dashboard.css">
   <link rel="stylesheet" href="app.css">
@@ -19,7 +20,7 @@
         </svg>
       </button>
       <button type="button" id="btnSync">Atualizar agora</button>
-      <button type="button" class="ghost" id="btnHide">Minimizar</button>
+      <button type="button" class="ghost desktop-only" id="btnHide">Minimizar</button>
     </div>
   </header>
 
@@ -114,7 +115,7 @@
       </label>
       <label class="check"><input type="checkbox" id="notifySales" checked> Avisar promoções</label>
       <label class="check"><input type="checkbox" id="notifyNews" checked> Avisar notícias</label>
-      <label class="check"><input type="checkbox" id="startWin" checked> Abrir com o Windows</label>
+      <label class="check desktop-only"><input type="checkbox" id="startWin" checked> Abrir com o Windows</label>
       <div class="color-head">
         <p class="hint">Cores</p>
         <button type="button" class="ghost" id="btnResetColors">Padrão</button>
@@ -141,9 +142,9 @@
         </div>
       </div>
       <p class="hint" id="iconMsg"></p>
-      <p class="hint">Para a barra de tarefas, crie o atalho e fixe <b>SteamControles</b> — não o electron.exe.</p>
-      <button type="button" class="ghost" id="btnShortcut">Criar atalho na área de trabalho</button>
-      <p class="hint" id="shortcutMsg"></p>
+      <p class="hint desktop-only">Para a barra de tarefas, crie o atalho e fixe <b>SteamControles</b> — não o electron.exe.</p>
+      <button type="button" class="ghost desktop-only" id="btnShortcut">Criar atalho na área de trabalho</button>
+      <p class="hint desktop-only" id="shortcutMsg"></p>
       <p class="hint" id="dataPath"></p>
     </div>
   </div>

@@ -24,6 +24,8 @@ const HOUR_MS = 60 * 60 * 1000;
 let mainWindow = null;
 let tray = null;
 let syncing = false;
+let syncProgress = null;
+let lastProgressSentAt = 0;
 let syncTimer = null;
 let lastSyncAt = null;
 let nextSyncAt = null;
@@ -286,8 +288,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
-    minWidth: 780,
-    minHeight: 560,
+    minWidth: 360,
+    minHeight: 480,
     title: "SteamControles",
     show: !process.argv.includes("--hidden"),
     backgroundColor: "#12161d",
@@ -338,13 +340,27 @@ function showWindow() {
 
 function createTray() {
   tray = new Tray(windowIcon());
-  tray.setToolTip("SteamControles");
+  updateTrayTooltip();
   tray.on("double-click", showWindow);
   rebuildTray();
 }
 
+function updateTrayTooltip() {
+  if (!tray || tray.isDestroyed()) return;
+  if (syncing && syncProgress && Number.isFinite(Number(syncProgress.percent))) {
+    tray.setToolTip(`SteamControles · ${syncProgress.percent}%`);
+    return;
+  }
+  if (syncing) {
+    tray.setToolTip("SteamControles · sincronizando");
+    return;
+  }
+  tray.setToolTip("SteamControles");
+}
+
 function rebuildTray() {
   if (!tray) return;
+  updateTrayTooltip();
   const next = nextSyncAt
     ? `Próximo sync ${new Date(nextSyncAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
     : "Sync automático 12 h";
@@ -412,6 +428,8 @@ async function getState() {
     theme: normalizeTheme(config.theme),
     timezone: config.timezone || "America/Sao_Paulo",
     syncing,
+    syncPercent: syncing ? syncProgress?.percent ?? 0 : null,
+    syncLabel: syncing ? syncProgress?.label || "" : "",
     lastSyncAt,
     nextSyncAt,
     packaged: app.isPackaged,
@@ -526,10 +544,15 @@ async function syncNow({ manual } = {}) {
     return { ok: false, message: "Conecte a Steam antes de sincronizar." };
   }
   syncing = true;
+  syncProgress = { phase: "wishlist", label: "wishlist", current: 0, total: 0, percent: 0 };
+  lastProgressSentAt = 0;
   rebuildTray();
-  if (mainWindow) mainWindow.webContents.send("sync-status", { syncing: true });
+  sendSyncProgress({ force: true });
   try {
-    const result = (await run()) || {};
+    const result =
+      (await run({
+        onProgress: (payload) => applySyncProgress(payload),
+      })) || {};
     lastSyncAt = new Date().toISOString();
     scheduleSync(config.syncEveryHours);
     if (!manual) notifySync(config, result);
@@ -539,6 +562,8 @@ async function syncNow({ manual } = {}) {
         body: `Atualizado · ${result.wishCount || 0} jogos na wishlist.`,
       }).show();
     }
+    syncing = false;
+    syncProgress = null;
     const state = await getState();
     if (mainWindow) mainWindow.webContents.send("sync-status", { syncing: false, state });
     return { ok: true, result, state };
@@ -549,8 +574,39 @@ async function syncNow({ manual } = {}) {
     return { ok: false, message };
   } finally {
     syncing = false;
+    syncProgress = null;
     rebuildTray();
   }
+}
+
+function applySyncProgress(payload) {
+  const prevPhase = syncProgress?.phase;
+  const percent = Math.max(0, Math.min(99, Math.round(Number(payload?.percent) || 0)));
+  syncProgress = {
+    phase: payload?.phase || "",
+    label: payload?.label || "",
+    current: Number(payload?.current) || 0,
+    total: Number(payload?.total) || 0,
+    percent,
+  };
+  updateTrayTooltip();
+  sendSyncProgress({ force: Boolean(payload?.phase && payload.phase !== prevPhase) });
+}
+
+function sendSyncProgress({ force } = {}) {
+  if (!syncing || !syncProgress) return;
+  const now = Date.now();
+  if (!force && now - lastProgressSentAt < 120) return;
+  lastProgressSentAt = now;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("sync-status", {
+    syncing: true,
+    percent: syncProgress.percent,
+    phase: syncProgress.phase,
+    label: syncProgress.label,
+    current: syncProgress.current,
+    total: syncProgress.total,
+  });
 }
 
 ipcMain.handle("get-state", () => getState());

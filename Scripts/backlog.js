@@ -157,6 +157,17 @@ async function resolveCovers(games, cachePath, config = {}, options = {}) {
   }
   const knownKeys = new Set(Object.keys(source).filter((key) => /^\d+$/.test(key)));
 
+  const reportCover = (current, total) => {
+    if (typeof options.onProgress === "function") {
+      try {
+        options.onProgress(current, total);
+      } catch {
+        // progress hooks must not break cover resolve
+      }
+    }
+  };
+  if (!games?.length) reportCover(1, 1);
+
   await mapPool(games, 8, async (game) => {
     const id = String(game.appId);
     if (urls[id] && !isBannedCover(urls[id])) {
@@ -197,7 +208,7 @@ async function resolveCovers(games, cachePath, config = {}, options = {}) {
     }
     game.cover = game.cover && !isBannedCover(game.cover) ? game.cover : "";
     if (!urls[id]) urls[id] = "";
-  });
+  }, (done, total) => reportCover(done, total));
 
   const out = { ...source };
   for (const [key, value] of Object.entries(urls)) out[key] = value;
@@ -753,8 +764,19 @@ async function refreshBacklog({
   steamId64 = null,
   ownedPayload = null,
   doneIdsOverride = null,
+  onProgress,
 } = {}) {
   const { paths } = config;
+  const report = (current, total, label) => {
+    if (typeof onProgress === "function") {
+      try {
+        onProgress({ current, total: Math.max(1, total), label: label || "backlog" });
+      } catch {
+        // progress hooks must not break backlog refresh
+      }
+    }
+  };
+  report(0, 1, "backlog");
   await fs.mkdir(paths.data, { recursive: true });
   await fs.mkdir(paths.dashboard, { recursive: true });
 
@@ -806,9 +828,12 @@ async function refreshBacklog({
   const tracked = await loadAndMergeTracked(paths, catalog, snapshots);
   await saveTracked(paths, tracked);
   const { open, done } = splitTracked(tracked, doneIds);
-  await resolveCovers([...open, ...done], path.join(paths.data, "backlogCovers.json"), config, {
+  const coverGames = [...open, ...done];
+  await resolveCovers(coverGames, path.join(paths.data, "backlogCovers.json"), config, {
     retryFailed: true,
+    onProgress: (current, total) => report(current, total, "capas"),
   });
+  report(1, 1, "capas");
 
   const updatedAt = nowIso();
   await writeNoteCopies(

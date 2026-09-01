@@ -122,6 +122,17 @@ function when(iso) {
   return date.toLocaleString("pt-BR", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
 }
 
+function formatSyncStatus(payload) {
+  if (!payload?.syncing) {
+    return `Último sync: ${when(payload?.lastSyncAt)} · próximo ${when(payload?.nextSyncAt)}`;
+  }
+  const raw = payload.syncPercent ?? payload.percent;
+  const n = Number(raw);
+  const shown = Number.isFinite(n) ? Math.max(0, Math.min(99, Math.round(n))) : 0;
+  const label = String(payload.syncLabel ?? payload.label ?? "").trim();
+  return label ? `Sincronizando… ${shown}% · ${label}` : `Sincronizando… ${shown}%`;
+}
+
 function normalizeQuery(value) {
   return String(value || "")
     .toLowerCase()
@@ -399,9 +410,7 @@ function render(state) {
   const connected = Boolean(state.steamId || state.profileUrl);
   $("setup").classList.toggle("hidden", connected);
   $("dash").classList.toggle("hidden", !connected);
-  $("statusLine").textContent = state.syncing
-    ? "Sincronizando em segundo plano…"
-    : `Último sync: ${when(state.lastSyncAt)} · próximo ${when(state.nextSyncAt)}`;
+  $("statusLine").textContent = formatSyncStatus(state);
   $("btnSync").disabled = state.syncing || !connected;
   $("wishCount").textContent = state.wishCount || 0;
   $("saleCount").textContent = state.onSale || 0;
@@ -442,7 +451,7 @@ async function refresh() {
   return state;
 }
 
-$("btnHide").onclick = () => window.steamApp.hide();
+$("btnHide").onclick = () => window.steamApp?.hide();
 $("btnSync").onclick = async () => {
   showError("");
   $("btnSync").disabled = true;
@@ -586,13 +595,27 @@ document.addEventListener("click", (event) => {
   const href = link.getAttribute("href");
   if (href && href.startsWith("http")) {
     event.preventDefault();
-    window.steamApp.openUrl(href);
+    if (window.steamApp) window.steamApp.openUrl(href);
+    else window.open(href, "_blank", "noopener");
   }
 });
+showTab("novidades");
+if (window.steamApp) {
 window.steamApp.onSync((payload) => {
   if (payload?.error) showError(payload.error);
-  if (payload?.state) render(payload.state);
-  else if (payload?.syncing) $("statusLine").textContent = "Sincronizando em segundo plano…";
+  if (payload?.state) {
+    render(payload.state);
+    return;
+  }
+  if (payload?.syncing) {
+    $("btnSync").disabled = true;
+    $("statusLine").textContent = formatSyncStatus(payload);
+    return;
+  }
+  refresh();
 });
-showTab("novidades");
-refresh();
+  refresh();
+} else {
+  $("statusLine").textContent = "Abra pelo app SteamControles.";
+  $("dash").classList.remove("hidden");
+}

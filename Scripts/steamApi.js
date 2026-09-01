@@ -95,15 +95,24 @@ async function fetchJson(url, { retries = 1, timeoutMs = 25000 } = {}) {
   throw lastError;
 }
 
-async function mapPool(items, concurrency, worker) {
+async function mapPool(items, concurrency, worker, onItemDone) {
   const results = new Array(items.length);
   let next = 0;
+  let done = 0;
   async function run() {
     while (true) {
       const index = next;
       next += 1;
       if (index >= items.length) return;
       results[index] = await worker(items[index], index);
+      done += 1;
+      if (typeof onItemDone === "function") {
+        try {
+          onItemDone(done, items.length, items[index], index);
+        } catch {
+          // progress hooks must not break the pool
+        }
+      }
     }
   }
   const n = Math.max(1, Math.min(concurrency, items.length || 1));

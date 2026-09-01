@@ -227,9 +227,15 @@ function eventFromSteam(curr, raw) {
   });
 }
 
-async function fetchWishlistNews(games, { language, refreshNews, fetchedAt }) {
+async function fetchWishlistNews(games, { language, refreshNews, fetchedAt, onProgress } = {}) {
   const stale = !fetchedAt || Date.now() - Date.parse(fetchedAt) > NEWS_STALE_MS;
-  if (!refreshNews && !stale) return { events: [], skipped: true, limited: false };
+  const report = (current, total) => {
+    if (typeof onProgress === "function") onProgress({ current, total });
+  };
+  if (!refreshNews && !stale) {
+    report(1, 1);
+    return { events: [], skipped: true, limited: false };
+  }
 
   let limited = false;
   const rows = await mapPool(games, NEWS_CONCURRENCY, async (curr) => {
@@ -251,7 +257,8 @@ async function fetchWishlistNews(games, { language, refreshNews, fetchedAt }) {
       if (isRateLimitError(error)) limited = true;
       return [];
     }
-  });
+  }, (done, total) => report(done, total));
+  report(games.length || 1, games.length || 1);
   return { events: rows.flat(), skipped: false, limited };
 }
 
@@ -262,6 +269,7 @@ async function collectWishlistUpdates({
   timezone = "America/Sao_Paulo",
   language = "brazilian",
   refreshNews = false,
+  onProgress,
 } = {}) {
   const stored = await readJson(paths.wishlistUpdates, { events: [], lastSeen: {} });
   const lastSeen = stored.lastSeen && typeof stored.lastSeen === "object" ? stored.lastSeen : {};
@@ -328,6 +336,7 @@ async function collectWishlistUpdates({
     language,
     refreshNews: refreshNews || existingNews < 2,
     fetchedAt: stored.newsFetchedAt,
+    onProgress,
   });
   if (news.events.length) fresh.push(...news.events);
 

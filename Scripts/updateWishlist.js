@@ -182,7 +182,55 @@ async function alreadyRanToday(cachePath, timezone) {
   return cache.lastRunDate === todayInTimezone(timezone);
 }
 
-async function main() {
+function createSyncProgress(onProgress) {
+  const stages = [
+    { id: "wishlist", label: "wishlist", weight: 12 },
+    { id: "loja", label: "loja", weight: 18 },
+    { id: "precos", label: "preços", weight: 35 },
+    { id: "noticias", label: "notícias", weight: 15 },
+    { id: "backlog", label: "backlog", weight: 20 },
+  ];
+  const before = {};
+  let acc = 0;
+  for (const stage of stages) {
+    before[stage.id] = acc;
+    acc += stage.weight;
+  }
+  const byId = Object.fromEntries(stages.map((stage) => [stage.id, stage]));
+  const emit = typeof onProgress === "function" ? onProgress : () => {};
+
+  function report(phase, current, total, label) {
+    const stage = byId[phase] || byId.wishlist;
+    const frac = total > 0 ? Math.max(0, Math.min(1, current / total)) : 0;
+    const raw = before[stage.id] + stage.weight * frac;
+    try {
+      emit({
+        phase: stage.id,
+        label: label || stage.label,
+        current: Number(current) || 0,
+        total: Number(total) || 0,
+        percent: Math.max(0, Math.min(99, Math.round(raw))),
+      });
+    } catch {
+      // UI progress must not abort the sync
+    }
+  }
+
+  return {
+    start(phase, total = 0, label) {
+      report(phase, 0, total, label);
+    },
+    tick(phase, current, total, label) {
+      report(phase, current, total, label);
+    },
+    done(phase, label) {
+      report(phase, 1, 1, label);
+    },
+  };
+}
+
+async function main(options = {}) {
+  const progress = createSyncProgress(options && options.onProgress);
   const daily = hasFlag("--daily");
   const config = await loadConfig();
   const { paths } = config;
@@ -196,6 +244,7 @@ async function main() {
   }
 
   console.log(paint("bold", "Steam Wishlist Dashboard v2 — sincronizando\n"));
+  progress.start("wishlist", 4);
 
   const existingNotes = await loadExistingNotes(paths.games);
   const history = await migrateLegacyIfNeeded(paths, config.timezone);
@@ -213,9 +262,11 @@ async function main() {
 
   if (config.steamId || config.profileUrl) {
     steamId64 = await resolveSteamId(config);
+    progress.tick("wishlist", 1, 4);
     console.log(paint("dim", `SteamID64: ${steamId64}`));
     wishlistItems = await fetchWishlist(steamId64);
     source = "steam";
+    progress.tick("wishlist", 2, 4);
     console.log(paint("cyan", `Wishlist pública: ${wishlistItems.length} jogos`));
     try {
       const owned = await fetchOwnedPlaytimes(steamId64, { apiKey: config.steamWebApiKey });
@@ -239,14 +290,19 @@ async function main() {
     } catch (error) {
       console.log(paint("yellow", `Biblioteca: ${error.message}`));
     }
+    progress.tick("wishlist", 3, 4);
   } else {
     const ids = await localAppIds(paths, existingNotes);
     wishlistItems = ids.map((appId) => ({ appId, priority: 0, dateAdded: null }));
+    progress.tick("wishlist", 3, 4);
     console.log(paint("yellow", "config.json sem steamId — rode conectar-steam.bat\n"));
     if (!wishlistItems.length) {
       throw new Error("Nenhum jogo local e nenhum SteamID. Rode conectar-steam.bat.");
     }
   }
+
+  progress.done("wishlist");
+  progress.start("loja", 4);
 
   try {
     mostWanted = await fetchMostWanted({ country: config.country, language: config.language, limit: 20 });
@@ -261,6 +317,7 @@ async function main() {
     mostWanted = prevWanted.games || [];
     console.log(paint("yellow", `Mais visados indisponíveis: ${error.message}`));
   }
+  progress.tick("loja", 1, 4);
 
   try {
     storeHub = await fetchStoreHub({ country: config.country, language: config.language });
@@ -285,6 +342,7 @@ async function main() {
   } catch (error) {
     console.log(paint("yellow", `Destaques Steam indisponíveis: ${error.message}\n`));
   }
+  progress.tick("loja", 2, 4);
 
   try {
     const previousGg = await readJson(paths.ggPopular, { games: [] });
@@ -304,6 +362,7 @@ async function main() {
   } catch (error) {
     console.log(paint("yellow", `gg.deals Most Popular indisponível: ${error.message}`));
   }
+  progress.tick("loja", 3, 4);
 
   try {
     const previousDeals = await readJson(paths.ggDeals, { newDeals: [], bestDeals: [] });
@@ -350,8 +409,10 @@ async function main() {
     };
     console.log(paint("yellow", `gg.deals New/Best deals indisponível: ${error.message}`));
   }
+  progress.done("loja");
 
   if (hasFlag("--panel-only")) {
+    progress.done("precos");
     for (const bucket of Object.values(history.games)) {
       ensureBasePrice(bucket);
     }
@@ -411,6 +472,7 @@ async function main() {
     const ggLists = await writeGgDealsCache(paths, storeHub, stamp);
     await writeJson(paths.storeHub, { updatedAt: stamp, ...storeHub, newDeals: ggLists.newDeals, bestDeals: ggLists.bestDeals });
     const previousWish = await readJson(paths.wishlist, { games: [] });
+    progress.start("noticias", gamesFromNotes.length || 1);
     const updates = await collectWishlistUpdates({
       paths,
       games: gamesFromNotes,
@@ -418,6 +480,7 @@ async function main() {
       timezone: config.timezone,
       language: config.language,
       refreshNews: false,
+      onProgress: (p) => progress.tick("noticias", p.current, p.total),
     });
     await writeDashboard(gamesFromNotes, config, {
       mostWanted,
@@ -428,7 +491,15 @@ async function main() {
       wishlistUpdates: updates.events,
       updatedAt: stamp,
     });
-    const backlog = await refreshBacklog({ config, steamId64, ownedPayload });
+    progress.done("noticias");
+    progress.start("backlog");
+    const backlog = await refreshBacklog({
+      config,
+      steamId64,
+      ownedPayload,
+      onProgress: (p) => progress.tick("backlog", p.current, p.total, p.label),
+    });
+    progress.done("backlog");
     const wishCount = gamesFromNotes.filter((game) => game.onWishlist).length;
     console.log(paint("green", `Painel redesenhado com ${wishCount} jogos (sem reconsultar cada preço).`));
     if (updates.newsLimited) {
@@ -493,6 +564,8 @@ async function main() {
   }
 
   console.log(paint("dim", `Checando ${wishlistItems.length} preços em paralelo...`));
+  const priceTotal = Math.max(1, wishlistItems.length * 2);
+  progress.start("precos", priceTotal);
   const priceHits = await mapPool(wishlistItems, PRICE_CONCURRENCY, async (item) => {
     if (steamLimit.tripped) {
       logSteamLimitedOnce();
@@ -515,7 +588,7 @@ async function main() {
         forbidden,
       };
     }
-  });
+  }, (done) => progress.tick("precos", done, priceTotal));
 
   for (let i = 0; i < wishlistItems.length; i += 1) {
     const item = wishlistItems[i];
@@ -690,6 +763,7 @@ async function main() {
       failed += 1;
       console.log(paint("red", `falhou: ${error.message}`));
     }
+    progress.tick("precos", wishlistItems.length + i + 1, priceTotal);
   }
 
   for (const appId of removed) {
@@ -787,6 +861,8 @@ async function main() {
   });
   const ggLists = await writeGgDealsCache(paths, storeHub, updatedAt);
   await writeJson(paths.storeHub, { updatedAt, ...storeHub, newDeals: ggLists.newDeals, bestDeals: ggLists.bestDeals });
+  progress.done("precos");
+  progress.start("noticias", gamesOut.length || 1);
   const updates = await collectWishlistUpdates({
     paths,
     games: gamesOut,
@@ -794,6 +870,7 @@ async function main() {
     timezone: config.timezone,
     language: config.language,
     refreshNews: true,
+    onProgress: (p) => progress.tick("noticias", p.current, p.total),
   });
   await writeDashboard(gamesOut, config, {
     mostWanted,
@@ -804,7 +881,15 @@ async function main() {
     wishlistUpdates: updates.events,
     updatedAt,
   });
-  const backlog = await refreshBacklog({ config, steamId64, ownedPayload });
+  progress.done("noticias");
+  progress.start("backlog");
+  const backlog = await refreshBacklog({
+    config,
+    steamId64,
+    ownedPayload,
+    onProgress: (p) => progress.tick("backlog", p.current, p.total, p.label),
+  });
+  progress.done("backlog");
 
   console.log("");
   console.log(
