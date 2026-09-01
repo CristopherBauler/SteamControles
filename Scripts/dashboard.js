@@ -322,6 +322,57 @@ function wishSearchBlock() {
   ].join("\n");
 }
 
+function storePageHtml({
+  mostWanted = [],
+  ggPopular = [],
+  storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [] },
+  ggDeals = {},
+} = {}) {
+  const popularCards = (mostWanted || [])
+    .map((game) => gameCard(game, { rank: game.rank, href: game.storeUrl }))
+    .join("");
+  const ggCards = (ggPopular || []).map((game) => ggCard(game)).join("");
+  const dealCards = (storeHub.dealsStrip || []).length
+    ? storeHub.dealsStrip
+        .map((item) => {
+          if (item.kind === "event") return eventBanner(item);
+          return gameCard(item, { rank: null, href: item.storeUrl });
+        })
+        .join("")
+    : (storeHub.events || []).map(eventBanner).join("") ||
+      (storeHub.specials || []).map((item) => gameCard(item, { href: item.storeUrl })).join("");
+  const dealLists = resolveDealLists(ggDeals, storeHub);
+  const newDeals =
+    (dealLists.newDeals || []).map(dealRow).join("") ||
+    `<div class="gwd-empty">Sem ofertas novas no gg.deals agora.</div>`;
+  const bestDeals =
+    (dealLists.bestDeals || []).map(dealRow).join("") ||
+    `<div class="gwd-empty">Sem best deals no gg.deals agora.</div>`;
+  const ggLink = { href: "https://gg.deals/", label: "Ver no gg.deals" };
+  const usdNote = storeHub.ggDealsUsd
+    ? `<div class="gwd-empty">Preços como no gg.deals (muitos em USD). A ordem das listas é a do site.</div>`
+    : "";
+  return `<div class="gwd-store">
+    ${sectionHead("Mais desejados na Steam", "ranking público da loja · inclui os que você já tem")}
+    ${scrollRow(popularCards)}
+    ${sectionHead("Most Popular Games", "gg.deals · capas da página da Steam")}
+    ${scrollRow(ggCards)}
+    ${sectionHead("Descontos e eventos da Steam", "promoções do dia · role para o lado")}
+    ${scrollRow(dealCards)}
+    <div class="gwd-deals-cols">
+      <div class="gwd-deals-col">
+        ${sectionHead("New deals", "gg.deals · New deals", ggLink)}
+        ${newDeals}
+      </div>
+      <div class="gwd-deals-col">
+        ${sectionHead("Best deals", "gg.deals · Best deals", ggLink)}
+        ${bestDeals}
+      </div>
+    </div>
+    ${usdNote}
+  </div>`;
+}
+
 function renderDashboard(games, extra = {}) {
   const {
     timezone,
@@ -465,4 +516,7 @@ async function writeDashboard(games, config, extra = {}) {
 module.exports = {
   writeDashboard,
   renderDashboard,
+  isUnreleased,
+  updatesBanner,
+  storePageHtml,
 };

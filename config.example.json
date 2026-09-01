@@ -10,5 +10,20 @@
   "projectFolder": "Steam",
   "requestDelayMs": 1000,
   "itadApiKey": "",
-  "steamWebApiKey": ""
+  "steamWebApiKey": "",
+  "syncEveryHours": 12,
+  "startWithWindows": true,
+  "notifySales": true,
+  "notifyNews": true,
+  "theme": {
+    "general": "#12161d",
+    "button": "#2563eb",
+    "tabs": {
+      "novidades": "#2563eb",
+      "wishlist": "#2563eb",
+      "loja": "#2563eb",
+      "jogos": "#2563eb",
+      "backlog": "#2563eb"
+    }
+  }
 }

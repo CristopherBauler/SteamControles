@@ -445,7 +445,14 @@ async function main() {
           (backlog.payload?.source === "local" ? " (horas do Steam local)" : "")
       )
     );
-    return;
+    return {
+      panelOnly: true,
+      wishCount,
+      events: updates.events || [],
+      freshCount: updates.freshCount || 0,
+      backlogOpen: backlog.open.length,
+      backlogDone: backlog.done.length,
+    };
   }
 
   const wishlistIds = new Set(wishlistItems.map((item) => item.appId));
@@ -819,9 +826,21 @@ async function main() {
   } else {
     console.log(paint("cyan", `Wishlist: ${updates.events.length} atualizações nos últimos 7 dias.`));
   }
+  return {
+    panelOnly: false,
+    wishCount: gamesOut.filter((game) => game.onWishlist).length,
+    events: updates.events || [],
+    freshCount: updates.freshCount || 0,
+    backlogOpen: backlog.open.length,
+    backlogDone: backlog.done.length,
+  };
 }
 
-main().catch((error) => {
-  console.error(paint("red", error.stack || error.message));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(paint("red", error.stack || error.message));
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { run: main };

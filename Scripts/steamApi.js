@@ -206,7 +206,7 @@ function parseAppDetails(appId, data) {
     discount: isFree ? 0 : Number(overview?.discount_percent || 0),
     currency: overview?.currency || "BRL",
     headerImage: data?.header_image || "",
-    capsuleImage: data?.header_image || "",
+    capsuleImage: data?.capsule_image || data?.header_image || "",
     storeUrl: `https://store.steampowered.com/app/${appId}`,
     steamTags: tags,
     shortDescription: data?.short_description || "",

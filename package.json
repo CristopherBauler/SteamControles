@@ -2,7 +2,8 @@
   "name": "steam-wishlist-dashboard",
   "version": "2.0.0",
   "private": true,
-  "description": "Dashboard local da wishlist Steam para Obsidian (preços em BRL).",
+  "description": "Dashboard local da wishlist Steam (PC e Obsidian, preços em BRL).",
+  "main": "desktop/main.js",
   "engines": {
     "node": ">=18"
   },
@@ -12,6 +13,42 @@
     "update": "node Scripts/updateWishlist.js",
     "panel": "node Scripts/updateWishlist.js --panel-only",
     "update:daily": "node Scripts/updateWishlist.js --daily",
-    "install:scheduler": "powershell -ExecutionPolicy Bypass -File Scripts/installScheduler.ps1"
+    "install:scheduler": "powershell -ExecutionPolicy Bypass -File Scripts/installScheduler.ps1",
+    "app": "electron .",
+    "app:build": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^35.7.5",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "dev.steamcontroles.app",
+    "productName": "SteamControles",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "Scripts/**/*",
+      "Snippets/game-wishlist-dashboard.css",
+      "SteamControles.cmd",
+      "SteamControles.vbs",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "desktop/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "SteamControles.exe"
+    }
   }
 }

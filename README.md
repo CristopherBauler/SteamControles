@@ -6,7 +6,29 @@ Dashboard local para o Obsidian: lê a **wishlist pública da Steam**, grava pre
 
 Você só adiciona ou remove jogos na Steam. O script detecta a mudança na próxima atualização.
 
+## App no Windows (sem Obsidian)
+
+Há um app portable com ícone na bandeja: sincroniza a wishlist/backlog **a cada 12 horas**, sem janela de CMD. Fechar a janela só esconde; o app continua ligado como e-mail/WhatsApp.
+
+Na pasta do projeto:
+
+```bash
+npm install
+npm run app
+```
+
+Gerar o `.exe` para passar para outra pessoa (não precisa de instalador):
+
+```bash
+npm run app:build
+```
+
+O arquivo fica em `dist/SteamControles.exe`. A outra pessoa **não precisa do Node nem do Obsidian**: abre o exe, clica **Entrar com Steam** (wishlist **pública**) e, se quiser o backlog da família, cola a chave em https://steamcommunity.com/dev/apikey. Os dados dela ficam em `%AppData%\SteamControles`.
+
+Para abrir no dia a dia (pasta do projeto): `SteamControles.vbs` (sem janela de CMD), `SteamControles.cmd` / `SteamControles.bat`, ou `npm run app`. **Não fixe** o `.vbs` nem o `electron.exe` na barra — o Windows mostra “Windows Script Host” ou a tela genérica do Electron. No app, **Ajustes → Criar atalho na barra / área de trabalho**, depois fixe o atalho **SteamControles**. Depois do `npm run app:build`, o alvo certo é `dist/SteamControles.exe`.
+
 ## Requisitos
+
 
 - Windows 10/11
 - [Node.js 18+](https://nodejs.org/)
