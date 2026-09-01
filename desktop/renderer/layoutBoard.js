@@ -275,7 +275,7 @@
     if (event.target.closest(".board-resize, .board-reset")) return false;
     if (event.target.closest("a, input, select, textarea, label")) return false;
     if (event.target.closest("button")) return false;
-    if (event.target.closest(".lib-card, .lib-grid, .lib-drop-hint, .lib-add-list, .lib-sort, [data-list-del], [data-list-edit], [data-unpin], [data-list-sort]")) {
+    if (event.target.closest(".lib-card, .lib-grid, .lib-drop-hint, .lib-add-list, .lib-sort, .lib-tone-wrap, [data-list-del], [data-list-edit], [data-unpin], [data-list-sort], [data-list-tone], [data-set-tone]")) {
       return false;
     }
     return Boolean(

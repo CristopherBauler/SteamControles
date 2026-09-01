@@ -409,18 +409,40 @@ function libCard(game, skipped) {
   </article>`;
 }
 
+function toneMenuHtml(listId, current) {
+  const tones = window.libraryBoard?.tones;
+  if (!Array.isArray(tones) || !tones.length) return "";
+  const tone = tones.some((item) => item.id === current) ? current : "green";
+  const swatches = tones
+    .map(
+      (item) =>
+        `<button type="button" class="lib-tone-swatch is-${esc(item.id)}${item.id === tone ? " is-current" : ""}" data-set-tone="${esc(item.id)}" data-list-id="${esc(listId)}" title="${esc(item.label)}" aria-label="${esc(item.label)}"></button>`
+    )
+    .join("");
+  return `<div class="lib-tone-wrap">
+    <button type="button" class="lib-list-btn lib-tone-btn" data-list-tone="${esc(listId)}" title="Cor da lista" aria-label="Cor da lista" aria-haspopup="true" aria-expanded="false">
+      <span class="lib-tone-dot" aria-hidden="true"></span>
+    </button>
+    <div class="lib-tone-menu" role="listbox" aria-label="Cores da lista">${swatches}</div>
+  </div>`;
+}
+
 function shelfHtml(shelf, skipped) {
   const count = `${shelf.items.length} jogo${shelf.items.length === 1 ? "" : "s"}`;
   const hoursBit = shelf.hours > 0 ? ` · ${formatHoursPlain(shelf.hours)} no total` : "";
   const sort = ["hours", "reviews", "name"].includes(shelf.sort) ? shelf.sort : "hours";
+  const tones = window.libraryBoard?.tones;
+  const tone =
+    Array.isArray(tones) && tones.some((item) => item.id === shelf.tone) ? shelf.tone : shelf.tone === "red" ? "red" : "green";
   const empty = shelf.items.length
     ? shelf.items.map((game) => libCard(game, skipped)).join("")
     : `<div class="lib-drop-hint">Arraste um jogo para cá</div>`;
-  return `<section class="lib-group is-${esc(shelf.tone)} board-tile" data-board-tile="${esc(shelf.key)}">
+  return `<section class="lib-group is-${esc(tone)} board-tile" data-board-tile="${esc(shelf.key)}">
     <div class="lib-group-head">
       <div class="lib-group-title" data-list-id="${esc(shelf.key)}">${esc(shelf.title)}</div>
       <div class="lib-group-extra">${esc(shelf.extra)} · ${esc(count)}${esc(hoursBit)}</div>
       <div class="lib-list-actions">
+        ${toneMenuHtml(shelf.key, tone)}
         <select class="lib-sort" data-list-sort="${esc(shelf.key)}" title="Ordenar só esta lista" aria-label="Ordenar ${esc(shelf.title)}">
           <option value="hours"${sort === "hours" ? " selected" : ""}>Horas</option>
           <option value="reviews"${sort === "reviews" ? " selected" : ""}>Reviews</option>
@@ -450,7 +472,7 @@ function paintLibrary() {
     : hintBits.join(" · ");
   const meta = libraryMeta.hint
     ? `<div class="lib-meta">${esc(libraryMeta.hint)} Marque um jogo para mandar para <b>Não vou jogar</b>.</div>`
-    : `<div class="lib-meta">Marque um jogo para <b>Não vou jogar</b>. Arraste um jogo para outra lista. Cada lista tem ordem própria (Horas, Reviews % positivas, Nome).</div>`;
+    : `<div class="lib-meta">Marque um jogo para <b>Não vou jogar</b>. Arraste um jogo para outra lista. Cada lista tem ordem própria (Horas, Reviews % positivas, Nome) e uma cor.</div>`;
   const body = shelves.map((shelf) => shelfHtml(shelf, false)).join("");
   $("jogos").innerHTML = meta + (body || `<div class="empty-games">Nenhum jogo na biblioteca. Clique em Atualizar agora.</div>`);
   if (window.layoutBoard) window.layoutBoard.apply($("jogos"), "jogos");

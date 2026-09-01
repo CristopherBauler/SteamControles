@@ -13,6 +13,19 @@
     { id: "never", title: "Nunca jogado", extra: "zero horas neste PC", tone: "red", auto: "never" },
   ];
   const SORTS = ["hours", "reviews", "name"];
+  const TONES = [
+    { id: "green", label: "Verde" },
+    { id: "red", label: "Vermelho" },
+    { id: "blue", label: "Azul" },
+    { id: "yellow", label: "Amarelo" },
+    { id: "purple", label: "Roxo" },
+    { id: "orange", label: "Laranja" },
+    { id: "teal", label: "Ciano" },
+    { id: "pink", label: "Rosa" },
+    { id: "gray", label: "Cinza" },
+    { id: "indigo", label: "Índigo" },
+  ];
+  const TONE_IDS = new Set(TONES.map((item) => item.id));
   const NAME_COLLATOR = new Intl.Collator("pt-BR", { sensitivity: "base", numeric: true });
   const AUTO_TEST = {
     h100: (h) => h >= 100,
@@ -58,7 +71,7 @@
     if (!item || typeof item !== "object") return null;
     const id = String(item.id || "").trim();
     if (!id) return null;
-    const tone = item.tone === "red" ? "red" : "green";
+    const tone = TONE_IDS.has(item.tone) ? item.tone : "green";
     const auto = DEFAULT_LISTS.some((d) => d.auto === item.auto) ? item.auto : null;
     return {
       id,
@@ -220,6 +233,23 @@
     if (onChange) onChange();
   }
 
+  function setTone(listId, tone) {
+    const list = data.lists.find((item) => item.id === listId);
+    if (!list || !TONE_IDS.has(tone) || list.tone === tone) return;
+    list.tone = tone;
+    persist();
+    if (onChange) onChange();
+  }
+
+  function closeToneMenus(root) {
+    if (!root) return;
+    root.querySelectorAll(".lib-tone-wrap.is-open").forEach((wrap) => {
+      wrap.classList.remove("is-open");
+      const btn = wrap.querySelector("[data-list-tone]");
+      if (btn) btn.setAttribute("aria-expanded", "false");
+    });
+  }
+
   function removeList(listId) {
     if (data.lists.length <= 1) return;
     const list = data.lists.find((item) => item.id === listId);
@@ -276,7 +306,33 @@
         const id = edit.getAttribute("data-list-edit");
         const title = [...root.querySelectorAll(".lib-group-title")].find((el) => el.getAttribute("data-list-id") === id);
         if (title) startRename(title);
+        return;
       }
+      const swatch = event.target.closest("[data-set-tone]");
+      if (swatch && root.contains(swatch)) {
+        event.preventDefault();
+        closeToneMenus(root);
+        setTone(swatch.getAttribute("data-list-id"), swatch.getAttribute("data-set-tone"));
+        return;
+      }
+      const toneBtn = event.target.closest("[data-list-tone]");
+      if (toneBtn && root.contains(toneBtn)) {
+        event.preventDefault();
+        const wrap = toneBtn.closest(".lib-tone-wrap");
+        const open = wrap?.classList.contains("is-open");
+        closeToneMenus(root);
+        if (wrap && !open) {
+          wrap.classList.add("is-open");
+          toneBtn.setAttribute("aria-expanded", "true");
+        }
+      }
+    });
+    document.addEventListener("click", (event) => {
+      if (event.target.closest(".lib-tone-wrap")) return;
+      closeToneMenus(root);
+    });
+    root.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeToneMenus(root);
     });
     root.addEventListener("change", (event) => {
       const sel = event.target.closest("[data-list-sort]");
@@ -543,5 +599,6 @@
     ensureTools,
     bind,
     defaults: DEFAULT_LISTS,
+    tones: TONES,
   };
 })(window);
