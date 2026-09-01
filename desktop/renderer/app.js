@@ -125,12 +125,16 @@ function when(iso) {
 function formatSyncStatus(payload) {
   if (!payload?.syncing) {
     if (document.body.classList.contains("capacitor")) {
+      if (payload?.paired && payload?.seededFromPc) {
+        return `Celular · último ${when(payload?.lastSyncAt)} · marcas com o PC no Wi‑Fi`;
+      }
       if (payload?.paired) {
-        return `PC · último: ${when(payload?.lastSyncAt)} · Atualizar puxa do computador`;
+        return `Primeiro espelho do PC…`;
       }
       return `Último sync: ${when(payload?.lastSyncAt)} · toque em Atualizar agora`;
     }
-    return `Último sync: ${when(payload?.lastSyncAt)} · próximo ${when(payload?.nextSyncAt)}`;
+    const storeBit = payload?.lastStoreAt ? ` · Loja ${when(payload.lastStoreAt)}` : "";
+    return `Wishlist: ${when(payload?.lastSyncAt)}${storeBit} · próximo ${when(payload?.nextSyncAt)}`;
   }
   const raw = payload.syncPercent ?? payload.percent;
   const n = Number(raw);
@@ -206,7 +210,7 @@ function buckets(games) {
     sale: all.filter((game) => !isUnreleased(game) && Number(game.discount) > 0),
     soon: all.filter((game) => isUnreleased(game)),
     full: all.filter((game) => !isUnreleased(game) && !Number(game.discount)),
-    aa: all.filter((game) => game.earlyAccess),
+    ea: all.filter((game) => game.earlyAccess),
   };
 }
 
@@ -220,7 +224,7 @@ function sortGames(key, list) {
     arr.sort(byNamePt);
     return arr;
   }
-  if (key === "aa") {
+  if (key === "ea") {
     const soon = arr.filter((game) => isUnreleased(game));
     const priced = arr.filter((game) => !isUnreleased(game));
     return [...sortGames("soon", soon), ...priced.sort(byPriceAsc)];
@@ -258,7 +262,7 @@ function showTab(tab) {
 }
 
 function setWishFilter(filter) {
-  wishFilter = ["all", "sale", "soon", "full", "aa"].includes(filter) ? filter : "all";
+  wishFilter = ["all", "sale", "soon", "full", "ea"].includes(filter) ? filter : "all";
   document.querySelectorAll("#wishStats .stat").forEach((btn) => {
     btn.classList.toggle("is-active", btn.dataset.filter === wishFilter);
   });
@@ -275,7 +279,7 @@ function paintGames() {
     sale: "em promoção · menor preço na frente",
     soon: "ainda não lançou · A–Z",
     full: "preço normal · menor preço na frente",
-    aa: "acesso antecipado · não lançados na frente, depois menor preço",
+    ea: "acesso antecipado · não lançados na frente, depois menor preço",
   };
   $("wishHint").textContent = query
     ? `${list.length} resultado(s) em ${labels[wishFilter]}`
@@ -284,7 +288,7 @@ function paintGames() {
     list
       .map((game) => {
         const img = game.headerImage ? `<img src="${esc(game.headerImage)}" alt="">` : `<div class="ph"></div>`;
-        const badge = game.earlyAccess ? `<span class="ea-badge">AA</span>` : "";
+        const badge = game.earlyAccess ? `<span class="ea-badge">EA</span>` : "";
         return `<a class="game" href="${esc(game.storeUrl || "#")}">${img}<span>${esc(game.name || "")}</span><em>${esc(priceText(game))}${badge}</em></a>`;
       })
       .join("") || `<div class="empty-games">Nenhum jogo neste filtro.</div>`;
@@ -351,6 +355,18 @@ function libCoverList(game) {
   return list;
 }
 
+function dealCoverError(img) {
+  const next = String(img.getAttribute("data-fallback") || "").trim();
+  if (next && img.getAttribute("src") !== next) {
+    img.removeAttribute("data-fallback");
+    img.src = next;
+    return;
+  }
+  const ph = document.createElement("div");
+  ph.className = "gwd-deal-ph";
+  img.replaceWith(ph);
+}
+
 function libCoverError(img) {
   const next = String(img.dataset.covers || "")
     .split("|")
@@ -373,51 +389,55 @@ function libCard(game, skipped) {
     ? `<span class="gwd-bl-never">${esc(hours.text)}</span>`
     : `<span class="gwd-bl-hours">${esc(hours.text)}</span>`;
   const family = game.family ? ` <span class="gwd-bl-family">Família</span>` : "";
+  const reviews =
+    game.reviewPercent != null && Number.isFinite(Number(game.reviewPercent))
+      ? `<span class="gwd-bl-reviews" title="${esc(String(game.reviewPercent))}% positivas${game.reviewTotal ? ` · ${Number(game.reviewTotal).toLocaleString("pt-BR")} análises` : ""}">${esc(String(game.reviewPercent))}%</span>`
+      : "";
+  const unpin =
+    !skipped && window.libraryBoard?.isPinned?.(game.appId)
+      ? `<button type="button" class="lib-unpin" data-unpin="${esc(game.appId)}" title="Devolver à faixa de horas">↩</button>`
+      : "";
   const covers = libCoverList(game);
   const img = covers.length
-    ? `<img src="${esc(covers[0])}" alt="" loading="lazy" data-covers="${esc(covers.slice(1).join("|"))}" onerror="libCoverError(this)">`
+    ? `<img src="${esc(covers[0])}" alt="" draggable="false" loading="lazy" data-covers="${esc(covers.slice(1).join("|"))}" onerror="libCoverError(this)">`
     : `<span class="lib-cover-empty" aria-hidden="true"></span>`;
-  return `<article class="lib-card">
+  return `<article class="lib-card" data-app-id="${esc(game.appId)}" draggable="true">
     <input type="checkbox" data-skip="${esc(game.appId)}" ${skipped ? "checked" : ""} title="${skipped ? "Devolver à biblioteca" : "Não vou jogar"}">
-    <a class="lib-link" href="${esc(game.storeUrl || "#")}">${img}<span class="lib-name">${esc(game.name || "")}</span></a>
-    ${hoursEl}${family}
+    <span class="lib-move" title="Arrastar para outra lista" aria-hidden="true">⋮⋮</span>
+    <a class="lib-link" href="${esc(game.storeUrl || "#")}" draggable="false">${img}<span class="lib-name">${esc(game.name || "")}</span></a>
+    ${hoursEl}${reviews}${family}${unpin}
   </article>`;
 }
 
 function shelfHtml(shelf, skipped) {
   const count = `${shelf.items.length} jogo${shelf.items.length === 1 ? "" : "s"}`;
   const hoursBit = shelf.hours > 0 ? ` · ${formatHoursPlain(shelf.hours)} no total` : "";
-  return `<div class="lib-shelf">
-    <div>
-      <div class="lib-shelf-title">${esc(shelf.title)}</div>
-      <div class="lib-shelf-kicker">${esc(shelf.extra)}</div>
-    </div>
-    <div class="lib-shelf-extra">${esc(count)}${esc(hoursBit)}</div>
-  </div>
-  <div class="lib-grid">${shelf.items.map((game) => libCard(game, skipped)).join("")}</div>`;
-}
-
-function groupHtml(tone, title, extra, shelves, skipped) {
-  if (!shelves.length) return "";
-  return `<section class="lib-group is-${esc(tone)}">
+  const sort = ["hours", "reviews", "name"].includes(shelf.sort) ? shelf.sort : "hours";
+  const empty = shelf.items.length
+    ? shelf.items.map((game) => libCard(game, skipped)).join("")
+    : `<div class="lib-drop-hint">Arraste um jogo para cá</div>`;
+  return `<section class="lib-group is-${esc(shelf.tone)} board-tile" data-board-tile="${esc(shelf.key)}">
     <div class="lib-group-head">
-      <div class="lib-group-title">${esc(title)}</div>
-      <div class="lib-group-extra">${esc(extra)}</div>
+      <div class="lib-group-title" data-list-id="${esc(shelf.key)}">${esc(shelf.title)}</div>
+      <div class="lib-group-extra">${esc(shelf.extra)} · ${esc(count)}${esc(hoursBit)}</div>
+      <div class="lib-list-actions">
+        <select class="lib-sort" data-list-sort="${esc(shelf.key)}" title="Ordenar só esta lista" aria-label="Ordenar ${esc(shelf.title)}">
+          <option value="hours"${sort === "hours" ? " selected" : ""}>Horas</option>
+          <option value="reviews"${sort === "reviews" ? " selected" : ""}>Reviews</option>
+          <option value="name"${sort === "name" ? " selected" : ""}>Nome</option>
+        </select>
+        <button type="button" class="lib-list-btn" data-list-edit="${esc(shelf.key)}" title="Renomear lista">✎</button>
+        <button type="button" class="lib-list-btn" data-list-del="${esc(shelf.key)}" title="Remover lista">×</button>
+      </div>
     </div>
-    ${shelves.map((shelf) => shelfHtml(shelf, skipped)).join("")}
+    <div class="lib-grid">${empty}</div>
   </section>`;
 }
 
 function paintLibrary() {
   const query = normalizeQuery($("jogosSearch")?.value);
   const list = libraryGames.filter((game) => nameMatches(game.name, query));
-  const shelves = groupByHours(list);
-  const played = shelves.filter((shelf) => shelf.tone === "green");
-  const leftover = shelves.filter((shelf) => shelf.tone === "red");
-  const playedCount = played.reduce((sum, shelf) => sum + shelf.items.length, 0);
-  const leftoverCount = leftover.reduce((sum, shelf) => sum + shelf.items.length, 0);
-  const playedHours = played.reduce((sum, shelf) => sum + shelf.hours, 0);
-  const leftoverHours = leftover.reduce((sum, shelf) => sum + shelf.hours, 0);
+  const shelves = window.libraryBoard?.group ? window.libraryBoard.group(list) : groupByHours(list);
   const never = list.filter((game) => libHours(game) <= 0).length;
   const totalHours = list.reduce((sum, game) => sum + libHours(game), 0);
   const hintBits = [
@@ -430,19 +450,14 @@ function paintLibrary() {
     : hintBits.join(" · ");
   const meta = libraryMeta.hint
     ? `<div class="lib-meta">${esc(libraryMeta.hint)} Marque um jogo para mandar para <b>Não vou jogar</b>.</div>`
-    : `<div class="lib-meta">Marque um jogo para mandar para <b>Não vou jogar</b> (aba Backlog).</div>`;
-  const body =
-    groupHtml("green", "10 h ou mais", `${playedCount} jogos · ${formatHoursPlain(playedHours)} no total`, played, false) +
-    groupHtml(
-      "red",
-      "Menos de 10 h",
-      leftoverHours > 0
-        ? `${leftoverCount} jogos · ${formatHoursPlain(leftoverHours)} jogadas · ${never} nunca tocados`
-        : `${leftoverCount} jogos · ${never} nunca tocados`,
-      leftover,
-      false
-    );
+    : `<div class="lib-meta">Marque um jogo para <b>Não vou jogar</b>. Arraste um jogo para outra lista. Cada lista tem ordem própria (Horas, Reviews % positivas, Nome).</div>`;
+  const body = shelves.map((shelf) => shelfHtml(shelf, false)).join("");
   $("jogos").innerHTML = meta + (body || `<div class="empty-games">Nenhum jogo na biblioteca. Clique em Atualizar agora.</div>`);
+  if (window.layoutBoard) window.layoutBoard.apply($("jogos"), "jogos");
+  if (window.libraryBoard) {
+    window.libraryBoard.ensureTools($("jogos"));
+    window.libraryBoard.bind($("jogos"), { onChange: () => paintLibrary() });
+  }
 }
 
 function paintSkipped() {
@@ -472,7 +487,7 @@ function paintAccount(state) {
   if (status) {
     if (state?.paired) {
       status.textContent = connected
-        ? `Conectado: ${label} · biblioteca do PC`
+        ? `Conectado: ${label} · Steam neste celular`
         : `Pareado com o PC`;
     } else {
       status.textContent = connected ? `Conectado: ${label}` : "Não conectado";
@@ -489,7 +504,9 @@ function paintPcLink(state) {
   const disconnect = $("btnPcDisconnect");
   if (status) {
     status.textContent = state?.paired
-      ? `Vinculado ao PC ${state.pcHost || ""}`.trim()
+      ? state?.seededFromPc
+        ? `Vinculado ao PC · marcas no Wi‑Fi · Steam neste celular`
+        : `Vinculado ao PC · espelhando…`
       : "Sem vínculo com o PC";
   }
   if (host && state?.pcHost) {
@@ -585,12 +602,16 @@ function render(state) {
   $("saleCount").textContent = state.onSale || 0;
   $("comingCount").textContent = state.comingCount || 0;
   $("fullCount").textContent = state.fullCount || 0;
-  $("aaCount").textContent = state.aaCount || 0;
+  $("eaCount").textContent = state.eaCount ?? state.aaCount ?? 0;
   $("hours").value = String(state.syncEveryHours || 12);
   $("notifySales").checked = state.notifySales !== false;
   $("notifyNews").checked = state.notifyNews !== false;
   $("startWin").checked = state.startWithWindows !== false;
-  $("dataPath").textContent = state.dataPath || "";
+  if ($("dataPath")) {
+    $("dataPath").textContent = state.backupPath
+      ? `Cópia automática neste PC. Ajustes → Exportar cópia se for formatar o Windows.`
+      : "";
+  }
   if ($("appVersionLine")) {
     $("appVersionLine").textContent = state.appVersion ? `Versão ${state.appVersion}` : "Versão";
   }
@@ -599,6 +620,8 @@ function render(state) {
     fillThemeInputs(savedTheme);
     applyTheme(savedTheme);
   }
+  if (window.layoutBoard && state.layout) window.layoutBoard.mergeFromServer(state.layout);
+  if (window.libraryBoard && state.libraryLists) window.libraryBoard.mergeFromServer(state.libraryLists);
   $("novidades").innerHTML =
     state.novidadesHtml ||
     `<div class="gwd-updates gwd-updates-quiet">Nenhuma atualização na wishlist nos últimos 7 dias.</div>`;
@@ -611,6 +634,15 @@ function render(state) {
   paintGames();
   paintLibrary();
   paintSkipped();
+  paintBoards();
+}
+
+function paintBoards() {
+  if (!window.layoutBoard) return;
+  const nov = document.querySelector("#novidades [data-board='novidades']");
+  const loja = document.querySelector("#loja [data-board='loja']");
+  if (nov) window.layoutBoard.apply(nov, "novidades");
+  if (loja) window.layoutBoard.apply(loja, "loja");
 }
 
 function showError(message) {
@@ -680,6 +712,47 @@ $("btnResetIcon").onclick = async () => {
     $("iconMsg").textContent = error.message || String(error);
   }
 };
+if ($("btnExportBackup") && window.steamApp?.exportBackup) {
+  $("btnExportBackup").onclick = async () => {
+    const msg = $("backupMsg");
+    if (msg) msg.textContent = "Salvando…";
+    try {
+      const result = await window.steamApp.exportBackup();
+      if (result.canceled) {
+        if (msg) msg.textContent = "";
+        return;
+      }
+      if (msg) {
+        msg.textContent = result.ok
+          ? `Cópia salva · ${result.skipped || 0} jogos em Não vou jogar.`
+          : result.message || "Não deu para exportar.";
+      }
+    } catch (error) {
+      if (msg) msg.textContent = error.message || String(error);
+    }
+  };
+}
+if ($("btnImportBackup") && window.steamApp?.importBackup) {
+  $("btnImportBackup").onclick = async () => {
+    const msg = $("backupMsg");
+    if (msg) msg.textContent = "Lendo arquivo…";
+    try {
+      const result = await window.steamApp.importBackup();
+      if (result.canceled) {
+        if (msg) msg.textContent = "";
+        return;
+      }
+      if (msg) {
+        msg.textContent = result.ok
+          ? `Restaurado · ${result.skipped || 0} marcações.`
+          : result.message || "Arquivo inválido.";
+      }
+      await refresh();
+    } catch (error) {
+      if (msg) msg.textContent = error.message || String(error);
+    }
+  };
+}
 if ($("btnDownloadApk")) {
   $("btnDownloadApk").onclick = () => {
     const url = "https://github.com/CristopherBauler/SteamControles/releases";
@@ -761,8 +834,27 @@ if ($("btnPcConnect")) {
         code: $("pcCodeInput")?.value || "",
       });
       if ($("pcCodeInput")) $("pcCodeInput").value = "";
-      if (msg) msg.textContent = "Vinculado. Código salvo. Daqui pra frente é só Atualizar agora.";
+      if (msg) msg.textContent = "Espelhado. Daqui pra frente Atualizar usa a Steam neste celular; Não vou jogar ainda fala com o PC no Wi‑Fi.";
       render(state);
+    } catch (error) {
+      if (msg) msg.textContent = error.message || String(error);
+    }
+  };
+}
+if ($("btnReseedPc")) {
+  $("btnReseedPc").onclick = async () => {
+    if (!window.steamApp?.reseedFromPc) return;
+    const msg = $("pcLinkMsg");
+    if (msg) msg.textContent = "Puxando o PC…";
+    try {
+      const result = await window.steamApp.reseedFromPc();
+      if (!result.ok) {
+        if (msg) msg.textContent = result.message || "Não achei o PC.";
+        if (result.state) render(result.state);
+        return;
+      }
+      if (msg) msg.textContent = "Cópia nova do PC. Depois cada um volta a atualizar sozinho.";
+      render(result.state);
     } catch (error) {
       if (msg) msg.textContent = error.message || String(error);
     }

@@ -6,9 +6,11 @@
 const fs = require("fs/promises");
 const path = require("path");
 const { readJson, writeJson, nowIso } = require("./config");
-const { fetchOwnedPlaytimes, fetchAppDetails, mapPool } = require("./steamApi");
+const { fetchOwnedPlaytimes, fetchAppDetails, fetchReviews, mapPool } = require("./steamApi");
 
 const NAME_RESOLVE_LIMIT = 15;
+const REVIEW_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const REVIEW_BATCH = 80;
 const SKIP_APP_IDS = new Set([7, 228980, 250820]);
 const SKIP_TYPES = new Set(["config", "tool"]);
 const JUNK_NAME =
@@ -720,6 +722,12 @@ async function saveDoneState(paths, doneGames) {
     appIds,
     games,
   });
+  try {
+    const { mirrorBacklogFiles } = require("./userBackup");
+    await mirrorBacklogFiles(paths);
+  } catch {
+    // espelho no AppData não pode quebrar a marcação
+  }
 }
 
 async function resolveMissingNames(games, config, cachePath) {
@@ -834,6 +842,10 @@ async function refreshBacklog({
     onProgress: (current, total) => report(current, total, "capas"),
   });
   report(1, 1, "capas");
+  await fillLibraryReviews(config, coverGames, {
+    onProgress: (current, total) => report(current, total, "reviews"),
+  });
+  report(1, 1, "reviews");
 
   const updatedAt = nowIso();
   await writeNoteCopies(
@@ -857,6 +869,58 @@ async function refreshBacklog({
   return { open, done, payload, updatedAt };
 }
 
+function attachReviews(games, cache) {
+  const map = cache?.games && typeof cache.games === "object" ? cache.games : {};
+  for (const game of games || []) {
+    const hit = map[String(game.appId)];
+    if (!hit) continue;
+    if (hit.percent != null && Number.isFinite(Number(hit.percent))) {
+      game.reviewPercent = Number(hit.percent);
+    }
+    game.reviewTotal = Number(hit.total) || 0;
+  }
+}
+
+async function fillLibraryReviews(config, games, options = {}) {
+  const file = config?.paths?.libraryReviews;
+  if (!file) return false;
+  const cache = await readJson(file, { games: {} });
+  if (!cache.games || typeof cache.games !== "object") cache.games = {};
+  const now = Date.now();
+  const stale = (games || []).filter((game) => {
+    const id = Number(game?.appId);
+    if (!Number.isInteger(id) || id <= 0) return false;
+    const hit = cache.games[String(id)];
+    if (!hit || !hit.fetchedAt) return true;
+    const age = now - Date.parse(hit.fetchedAt);
+    return !Number.isFinite(age) || age > REVIEW_TTL_MS;
+  });
+  const batch = stale.slice(0, Number(options.limit) || REVIEW_BATCH);
+  if (!batch.length) {
+    attachReviews(games, cache);
+    return false;
+  }
+  const report = typeof options.onProgress === "function" ? options.onProgress : () => {};
+  let changed = false;
+  await mapPool(batch, 4, async (game) => {
+    const reviews = await fetchReviews(game.appId);
+    const failed = reviews.reviewPercent == null && reviews.reviewTotal == null;
+    if (failed) return;
+    cache.games[String(game.appId)] = {
+      percent: reviews.reviewPercent,
+      total: reviews.reviewTotal || 0,
+      fetchedAt: nowIso(),
+    };
+    changed = true;
+  }, (done, total) => report(done, total));
+  if (changed) {
+    cache.updatedAt = nowIso();
+    await writeJson(file, cache);
+  }
+  attachReviews(games, cache);
+  return changed;
+}
+
 function publicGame(game) {
   const id = Number(game.appId);
   const covers = coverCandidates(game, coverUrl(game));
@@ -868,6 +932,8 @@ function publicGame(game) {
     hours: gameHours(game),
     family: Boolean(game.family),
     storeUrl: `https://store.steampowered.com/app/${id}`,
+    reviewPercent: game.reviewPercent != null && Number.isFinite(Number(game.reviewPercent)) ? Number(game.reviewPercent) : null,
+    reviewTotal: Number(game.reviewTotal) || 0,
   };
 }
 
@@ -887,6 +953,7 @@ async function loadLibraryLists(config) {
     await resolveCovers(missing, coverPath, config);
     attachCachedCovers(all, readCoverMap(await readJson(coverPath, {})));
   }
+  attachReviews(all, await readJson(paths.libraryReviews, { games: {} }));
   const payload = await readJson(paths.ownedPlaytimes, {
     games: [],
     source: "none",
@@ -952,6 +1019,7 @@ module.exports = {
   gameHours,
   loadLibraryLists,
   toggleSkipped,
+  fillLibraryReviews,
   coverCandidates,
   coverUrl,
   defaultCapsule,

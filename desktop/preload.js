@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("steamApp", {
   pickIcon: () => ipcRenderer.invoke("pick-icon"),
   resetIcon: () => ipcRenderer.invoke("reset-icon"),
   toggleSkipped: (payload) => ipcRenderer.invoke("toggle-skipped", payload),
+  exportBackup: () => ipcRenderer.invoke("export-backup"),
+  importBackup: () => ipcRenderer.invoke("import-backup"),
   phoneLinkStatus: () => ipcRenderer.invoke("phone-link-status"),
   startPhoneLink: () => ipcRenderer.invoke("phone-link-start"),
   stopPhoneLink: () => ipcRenderer.invoke("phone-link-stop"),

@@ -73,9 +73,9 @@
           <b id="fullCount">0</b>
           <span>Preço normal</span>
         </button>
-        <button type="button" class="stat stat-aa" data-filter="aa" title="Acesso Antecipado">
-          <b id="aaCount">0</b>
-          <span>AA</span>
+        <button type="button" class="stat stat-ea" data-filter="ea" title="Acesso Antecipado">
+          <b id="eaCount">0</b>
+          <span>EA</span>
         </button>
       </div>
       <input id="search" type="search" placeholder="Buscar pelo nome" autocomplete="off" spellcheck="false">
@@ -113,10 +113,10 @@
         <h2 id="settingsTitle">Ajustes</h2>
         <button type="button" class="icon" id="btnCloseSettings" aria-label="Fechar">×</button>
       </div>
-      <p class="hint mobile-only">No celular não há sincronização automática de 12 h (isso é do PC). Use <b>Atualizar agora</b>.</p>
+      <p class="hint mobile-only">Neste celular o intervalo vale quando você <b>abre o app</b> ou toca <b>Atualizar agora</b>. O PC tem o relógio dele (bandeja).</p>
       <div class="account-box mobile-only" id="pcLinkBox">
         <p class="account-status" id="pcLinkStatus">Sem vínculo com o PC</p>
-        <p class="hint">No PC: Ajustes → Conectar celular → anote o IP e o código. No telefone (mesmo Wi‑Fi): cole os dois <b>uma vez</b>. O código fica salvo. Depois é só <b>Atualizar agora</b> nos dois — Jogos, backlog e AA iguais, sem colar de novo.</p>
+        <p class="hint">Primeira vez (mesmo Wi‑Fi): PC em Ajustes → Conectar celular. Aqui cole IP e código <b>uma vez</b>. O telefone copia wishlist, Jogos e Não vou jogar iguais ao PC. Depois cada um atualiza a Steam sozinho. Marcar Não vou jogar aqui entra no PC na próxima vez que os dois se falarem (Wi‑Fi).</p>
         <label>IP do PC
           <input id="pcHostInput" placeholder="192.168.0.10" inputmode="decimal" autocomplete="off" spellcheck="false">
         </label>
@@ -124,6 +124,7 @@
           <input id="pcCodeInput" placeholder="já salvo depois de conectar" inputmode="numeric" maxlength="8" autocomplete="off">
         </label>
         <button type="button" id="btnPcConnect">Conectar</button>
+        <button type="button" class="ghost" id="btnReseedPc">Puxar tudo do PC de novo</button>
         <button type="button" class="ghost" id="btnPcDisconnect">Desconectar do PC</button>
         <p class="hint" id="pcLinkMsg"></p>
       </div>
@@ -135,7 +136,7 @@
       </div>
       <div class="account-box pc-only" id="phoneLinkBox">
         <p class="account-status">Conectar celular</p>
-        <p class="hint">Ligue uma vez e deixe assim (vale na bandeja). O celular cola IP e código só no pareamento; depois é <b>Atualizar agora</b> nos dois. Encerrar gera código novo.</p>
+        <p class="hint">Ligue uma vez e deixe o app na bandeja. O celular cola IP e código só na primeira vez (espelho completo). Depois cada aparelho atualiza a Steam sozinho; Não vou jogar cruza neste Wi‑Fi. Encerrar gera código novo.</p>
         <button type="button" id="btnPhoneLinkOn">Conectar celular</button>
         <button type="button" class="ghost" id="btnPhoneLinkOff">Encerrar conexão do celular</button>
         <p class="pair-code hidden" id="phoneLinkCode"></p>
@@ -143,13 +144,16 @@
         <img class="pair-qr hidden" id="phoneLinkQr" alt="QR para parear" width="160" height="160">
         <p class="hint" id="phoneLinkHint"></p>
       </div>
-      <label class="pc-only">Sincronizar a cada
+      <label>Wishlist e biblioteca a cada
         <select id="hours">
           <option value="6">6 horas</option>
           <option value="12" selected>12 horas</option>
           <option value="24">24 horas</option>
         </select>
       </label>
+      <p class="hint">Nas abas Novidades, Loja e Jogos arraste o título da seção (como a barra de um navegador) e puxe o canto para o tamanho. Wishlist e Não vou jogar ficam iguais. Cada aba tem o botão Layout padrão.</p>
+      <p class="hint pc-only">No PC a Loja (Steam + gg.deals) atualiza sozinha a cada 30 minutos, sem esperar esse intervalo.</p>
+      <p class="hint mobile-only">Neste celular o intervalo é o atraso mínimo ao reabrir o app. A Loja também só muda no Atualizar / ao reabrir.</p>
       <label class="check pc-only"><input type="checkbox" id="notifySales" checked> Avisar promoções</label>
       <label class="check pc-only"><input type="checkbox" id="notifyNews" checked> Avisar notícias</label>
       <label class="check desktop-only"><input type="checkbox" id="startWin" checked> Abrir com o Windows</label>
@@ -179,6 +183,13 @@
         </div>
       </div>
       <p class="hint" id="iconMsg"></p>
+      <div class="account-box desktop-only">
+        <p class="account-status">Cópia das marcações</p>
+        <p class="hint">Não vou jogar, cores e conta ficam neste PC (como a Steam). Desinstalar o atalho não apaga. Formatar o Windows ou apagar a pasta do projeto apaga — exporte antes.</p>
+        <button type="button" class="ghost" id="btnExportBackup">Exportar cópia</button>
+        <button type="button" class="ghost" id="btnImportBackup">Restaurar cópia</button>
+        <p class="hint" id="backupMsg"></p>
+      </div>
       <p class="hint desktop-only">Para a barra de tarefas, crie o atalho e fixe <b>Minha Loja dos Desejos</b> — não o electron.exe.</p>
       <button type="button" class="ghost desktop-only" id="btnShortcut">Criar atalho na área de trabalho</button>
       <p class="hint desktop-only" id="shortcutMsg"></p>
@@ -193,6 +204,8 @@
 
   <p id="error" class="error hidden"></p>
   <script src="steamApp.mobile.js"></script>
+  <script src="layoutBoard.js"></script>
+  <script src="libraryBoard.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -41,6 +41,8 @@
     notifySales: true,
     notifyNews: true,
     theme: { ...DEFAULT_THEME, tabs: { ...DEFAULT_THEME.tabs } },
+    layout: {},
+    libraryLists: { lists: [], pins: {} },
     pendingSync: false,
     pcBaseUrl: "",
     pairCode: "",
@@ -101,8 +103,10 @@
       skippedIds: [],
       skippedGames: [],
       libraryMeta: {},
+      libraryReviews: {},
       lastSyncAt: null,
       fromPc: false,
+      seededFromPc: false,
       novidadesHtml: "",
       lojaHtml: "",
       pendingSkips: [],
@@ -225,6 +229,13 @@
     cache = { ...emptyCache(), ...parseJson(await prefGet(CACHE_KEY), parseJson(localStorage.getItem(LS_CACHE), {})) };
     cache.skippedIds = Array.isArray(cache.skippedIds) ? cache.skippedIds.map(Number) : [];
     cache.pendingSkips = Array.isArray(cache.pendingSkips) ? cache.pendingSkips : [];
+    if (
+      cache.seededFromPc !== true &&
+      cache.fromPc &&
+      ((cache.games || []).length || (cache.libraryGames || []).length)
+    ) {
+      cache.seededFromPc = true;
+    }
     const alreadyPaired =
       Boolean(settings.pcBaseUrl) && String(settings.pairCode || "").replace(/\D/g, "").length === 6;
     if (cache.eaSchema !== EA_SCHEMA) {
@@ -288,10 +299,16 @@
   function applyPcState(state) {
     if (!state || typeof state !== "object") return;
     cache.fromPc = true;
+    cache.seededFromPc = true;
     cache.games = Array.isArray(state.games) ? state.games : [];
     cache.libraryGames = Array.isArray(state.libraryGames) ? state.libraryGames : [];
     cache.skippedGames = Array.isArray(state.skippedGames) ? state.skippedGames : [];
-    cache.skippedIds = cache.skippedGames.map((game) => Number(game.appId)).filter((id) => id > 0);
+    cache.skippedIds = (Array.isArray(state.skippedAppIds) && state.skippedAppIds.length
+      ? state.skippedAppIds
+      : cache.skippedGames.map((game) => Number(game.appId))
+    )
+      .map(Number)
+      .filter((id) => id > 0);
     cache.libraryMeta = state.libraryMeta && typeof state.libraryMeta === "object" ? state.libraryMeta : {};
     cache.novidadesHtml = state.novidadesHtml || "";
     cache.lojaHtml = state.lojaHtml || "";
@@ -299,6 +316,30 @@
     if (state.steamId) settings.steamId = String(state.steamId);
     if (state.profileUrl) settings.profileUrl = String(state.profileUrl);
     if (state.theme) settings.theme = normalizeTheme(state.theme);
+  }
+
+  function restackLibrary() {
+    const skipped = new Set((cache.skippedIds || []).map(Number));
+    const all = [...(cache.libraryGames || []), ...(cache.skippedGames || [])];
+    const seen = new Map();
+    for (const game of all) {
+      const id = Number(game?.appId);
+      if (id > 0 && !seen.has(id)) seen.set(id, game);
+    }
+    cache.libraryGames = [...seen.values()].filter((game) => !skipped.has(Number(game.appId)));
+    cache.skippedGames = [...seen.values()].filter((game) => skipped.has(Number(game.appId)));
+  }
+
+  function applyRemoteMarks(ids) {
+    const remote = new Set((Array.isArray(ids) ? ids : []).map(Number).filter((id) => id > 0));
+    for (const item of cache.pendingSkips || []) {
+      const id = Number(item.appId);
+      if (id <= 0) continue;
+      if (item.skipped) remote.add(id);
+      else remote.delete(id);
+    }
+    cache.skippedIds = [...remote];
+    restackLibrary();
   }
 
   async function pcFetch(method, pathname, body) {
@@ -383,11 +424,25 @@
     const changes = (Array.isArray(cache.pendingSkips) ? cache.pendingSkips : []).filter(
       (item) => Number(item.appId) > 0
     );
-    if (!changes.length) return;
-    await pcFetch("POST", "/skips", {
+    if (!changes.length) return null;
+    const marks = await pcFetch("POST", "/skips", {
       changes: changes.map((item) => ({ appId: Number(item.appId), skipped: Boolean(item.skipped) })),
     });
     cache.pendingSkips = [];
+    if (marks && Array.isArray(marks.skippedAppIds)) applyRemoteMarks(marks.skippedAppIds);
+    return marks;
+  }
+
+  async function syncMarksWithPc() {
+    if (!isPaired()) return false;
+    await pushPendingSkips();
+    const marks = await pcFetch("GET", "/marks");
+    if (marks && Array.isArray(marks.skippedAppIds)) applyRemoteMarks(marks.skippedAppIds);
+    if (marks?.steamId && !settings.steamId) settings.steamId = String(marks.steamId);
+    if (marks?.profileUrl && !settings.profileUrl) settings.profileUrl = String(marks.profileUrl);
+    await persistCache();
+    await persistSettings();
+    return true;
   }
 
   async function pullPcState() {
@@ -416,7 +471,7 @@
 
   function detectEarlyAccess(data) {
     if (!data || typeof data !== "object") return false;
-    // Igual ao PC: só gênero 70 / texto de AA nas genres atuais. Tag leftover não conta.
+    // Igual ao PC: só gênero 70 / texto de EA nas genres atuais. Tag leftover não conta.
     if (Array.isArray(data.genres)) {
       return data.genres.some(genreLooksEarlyAccess);
     }
@@ -852,7 +907,62 @@
       hours: Number(game.hours) || 0,
       family: Boolean(game.family),
       storeUrl: `https://store.steampowered.com/app/${id}`,
+      reviewPercent: game.reviewPercent != null && Number.isFinite(Number(game.reviewPercent)) ? Number(game.reviewPercent) : null,
+      reviewTotal: Number(game.reviewTotal) || 0,
     };
+  }
+
+  async function fetchReviews(appId) {
+    const url = new URL(`https://store.steampowered.com/appreviews/${appId}`);
+    url.searchParams.set("json", "1");
+    url.searchParams.set("language", "all");
+    url.searchParams.set("purchase_type", "all");
+    url.searchParams.set("num_per_page", "0");
+    url.searchParams.set("filter", "summary");
+    try {
+      const payload = await fetchJson(url.toString(), { timeoutMs: 8000 });
+      const summary = payload?.query_summary || {};
+      const total = Number(summary.total_reviews || 0);
+      const percent = total > 0 ? Math.round((Number(summary.total_positive || 0) / total) * 100) : null;
+      return { reviewPercent: percent, reviewTotal: total || 0 };
+    } catch {
+      return { reviewPercent: null, reviewTotal: null };
+    }
+  }
+
+  function applyLibraryReviews(games) {
+    const map = cache.libraryReviews && typeof cache.libraryReviews === "object" ? cache.libraryReviews : {};
+    for (const game of games || []) {
+      const hit = map[String(game.appId)];
+      if (!hit) continue;
+      if (hit.percent != null && Number.isFinite(Number(hit.percent))) game.reviewPercent = Number(hit.percent);
+      game.reviewTotal = Number(hit.total) || 0;
+    }
+  }
+
+  async function fillLibraryReviews(games) {
+    if (!cache.libraryReviews || typeof cache.libraryReviews !== "object") cache.libraryReviews = {};
+    const now = Date.now();
+    const ttl = 14 * 24 * 60 * 60 * 1000;
+    const stale = (games || [])
+      .filter((game) => {
+        const hit = cache.libraryReviews[String(game.appId)];
+        if (!hit || !hit.fetchedAt) return true;
+        const age = now - Date.parse(hit.fetchedAt);
+        return !Number.isFinite(age) || age > ttl;
+      })
+      .slice(0, 80);
+    if (!stale.length) return;
+    await mapPool(stale, 3, async (game) => {
+      const reviews = await fetchReviews(game.appId);
+      if (reviews.reviewPercent == null && reviews.reviewTotal == null) return;
+      cache.libraryReviews[String(game.appId)] = {
+        percent: reviews.reviewPercent,
+        total: reviews.reviewTotal || 0,
+        fetchedAt: nowIso(),
+      };
+    });
+    await persistCache();
   }
 
   async function fetchLibrary(steamId64, onTick) {
@@ -891,18 +1001,32 @@
     if (onTick) onTick(3, 3, "biblioteca");
     const games = [...owned.values()].filter((game) => !isJunkGame(game)).map(publicGame);
     const skipped = new Set(cache.skippedIds.map(Number));
-    const open = games.filter((game) => !skipped.has(game.appId));
-    const done = games.filter((game) => skipped.has(game.appId));
+    const previous = [...(cache.libraryGames || []), ...(cache.skippedGames || [])];
+    const catalog = games.length ? [...games] : previous;
+    if (games.length) {
+      const have = new Set(games.map((game) => Number(game.appId)));
+      for (const game of previous) {
+        const id = Number(game.appId);
+        if (id && !have.has(id) && skipped.has(id)) catalog.push(game);
+      }
+    }
+    const open = catalog.filter((game) => !skipped.has(Number(game.appId)));
+    const done = catalog.filter((game) => skipped.has(Number(game.appId)));
+    await fillLibraryReviews([...open, ...done]);
+    applyLibraryReviews(open);
+    applyLibraryReviews(done);
     const payload = { source, games, communityPrivate: !xmlOk && !apiOk };
     let hint = "";
     let sourceHint = "sem horas da Steam";
-    if (source === "api") sourceHint = "fonte: API da Steam";
+    if (!games.length && previous.length) {
+      source = cache.libraryMeta?.source || "cache";
+      sourceHint = "cópia local (PC ou sync anterior)";
+      hint = "A Steam não atualizou a biblioteca agora. Mantive a lista que já estava neste celular.";
+    } else if (source === "api") sourceHint = "fonte: API da Steam";
     else if (source === "xml") sourceHint = "fonte: perfil público";
-    if (!games.length) {
+    if (!catalog.length) {
       hint =
-        "Biblioteca não veio. Deixe Detalhes dos jogos = Público no perfil, ou cole uma chave Web API em Ajustes. Não inventamos a lista se a Steam recusar.";
-    } else if (payload.communityPrivate && source === "none") {
-      hint = "A Steam não entregou a biblioteca. Detalhes dos jogos públicos ou chave Web API.";
+        "Biblioteca não veio. Pareie com o PC na primeira vez, ou deixe Detalhes dos jogos = Público / chave Web API.";
     }
     return {
       libraryGames: open,
@@ -1010,14 +1134,15 @@
     </a>`;
   }
 
-  function updatesColumn(title, events, empty) {
+  function updatesColumn(title, events, empty, tileId) {
+    const id = tileId ? ` data-board-tile="${esc(tileId)}"` : "";
     if (!events.length) {
-      return `<div class="gwd-updates-col">
+      return `<div class="gwd-updates-col board-tile"${id}>
         <div class="gwd-updates-col-head">${esc(title)}</div>
         <div class="gwd-updates-quiet">${esc(empty)}</div>
       </div>`;
     }
-    return `<div class="gwd-updates-col">
+    return `<div class="gwd-updates-col board-tile"${id}>
       <div class="gwd-updates-col-head">${esc(title)} <span>${events.length}</span></div>
       <div class="gwd-upd-day-list">${events.map(updateCard).join("")}</div>
     </div>`;
@@ -1031,20 +1156,18 @@
     if (!patches.length && !news.length && !promos.length) {
       return `<div class="gwd-updates gwd-updates-quiet">Nenhuma atualização na wishlist nos últimos 7 dias.</div>`;
     }
-    return `<div class="gwd-updates">
+    return `<div class="gwd-updates" data-board="novidades">
       <div class="gwd-updates-head">Novidades da wishlist</div>
-      <div class="gwd-updates-hint">últimos 7 dias · patches · notícias · promoções</div>
-      <div class="gwd-updates-cols">
-        ${updatesColumn("Atualizações", patches, "Nenhum patch ou lançamento nesta semana.")}
-        ${updatesColumn("Notícias", news, "Nenhuma notícia nesta semana.")}
-      </div>
+      <div class="gwd-updates-hint">últimos 7 dias · arraste as seções e mude o tamanho</div>
+      ${updatesColumn("Atualizações", patches, "Nenhum patch ou lançamento nesta semana.", "patches")}
+      ${updatesColumn("Notícias", news, "Nenhuma notícia nesta semana.", "news")}
       ${
         promos.length
-          ? `<div class="gwd-updates-promo">
+          ? `<div class="gwd-updates-promo board-tile" data-board-tile="promos">
         <div class="gwd-updates-col-head">Promoções <span>${promos.length}</span></div>
         <div class="gwd-upd-day-list">${promos.map(updateCard).join("")}</div>
       </div>`
-          : `<div class="gwd-updates-promo">
+          : `<div class="gwd-updates-promo board-tile" data-board-tile="promos">
         <div class="gwd-updates-col-head">Promoções</div>
         <div class="gwd-updates-quiet">Nenhuma promoção nesta semana.</div>
       </div>`
@@ -1053,7 +1176,40 @@
   }
 
   function cover(game) {
-    return game?.headerImage || game?.image || "";
+    const raw = String(game?.headerImage || game?.image || "");
+    if (raw && !/img\.gg\.deals/i.test(raw)) return raw;
+    const id = Number(game?.appId);
+    if (Number.isInteger(id) && id > 0) return capsuleUrl(id);
+    return "";
+  }
+
+  function dealCoverError(img) {
+    const next = String(img.getAttribute("data-fallback") || "").trim();
+    if (next && img.getAttribute("src") !== next) {
+      img.removeAttribute("data-fallback");
+      img.src = next;
+      return;
+    }
+    const ph = document.createElement("div");
+    ph.className = "gwd-deal-ph";
+    img.replaceWith(ph);
+  }
+  window.dealCoverError = dealCoverError;
+
+  function dealThumb(game) {
+    const img = cover(game);
+    const id = Number(game?.appId);
+    const fallback =
+      Number.isInteger(id) && id > 0
+        ? `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`
+        : "";
+    if (!img && !fallback) return `<div class="gwd-deal-ph"></div>`;
+    const src = img || fallback;
+    const next = src === fallback ? "" : fallback;
+    const err = next
+      ? ` data-fallback="${esc(next)}" onerror="dealCoverError(this)"`
+      : ` onerror="dealCoverError(this)"`;
+    return `<img src="${esc(src)}" alt="" referrerpolicy="no-referrer"${err}>`;
   }
 
   function discTag(discount) {
@@ -1111,8 +1267,7 @@
   }
 
   function dealRow(game) {
-    const img = cover(game);
-    const thumb = img ? `<img src="${esc(img)}" alt="">` : `<div class="gwd-deal-ph"></div>`;
+    const thumb = dealThumb(game);
     const href = game.storeUrl || game.ggDealsUrl || "#";
     const meta = [game.store || game.source || "Steam", game.relativeTime].filter(Boolean).join(" · ");
     const price =
@@ -1146,22 +1301,26 @@
       `<div class="gwd-empty">${ggBlocked ? "gg.deals bloqueado (Cloudflare). Mostrando ofertas da Steam." : "Sem ofertas novas agora."}</div>`;
     const bestDeals =
       (ggDeals.bestDeals || []).map(dealRow).join("") || `<div class="gwd-empty">Sem best deals agora.</div>`;
-    return `<div class="gwd-store">
-      ${sectionHead("Mais desejados na Steam", "ranking público da loja")}
-      ${scrollRow(popularCards)}
-      ${sectionHead("Em evidência", ggBlocked ? "Steam · gg.deals indisponível neste celular" : "loja · capas da Steam", { href: "https://gg.deals/", label: "Abrir gg.deals" })}
-      ${scrollRow(ggCards || popularCards)}
-      ${sectionHead("Descontos e eventos da Steam", "promoções do dia · toque abre a Steam")}
-      ${scrollRow(dealCards)}
-      <div class="gwd-deals-cols">
-        <div class="gwd-deals-col">
-          ${sectionHead("Ofertas", "Steam store · toque abre o app da Steam", { href: "https://store.steampowered.com/specials/", label: "Especiais Steam" })}
-          ${newDeals}
-        </div>
-        <div class="gwd-deals-col">
-          ${sectionHead("Melhores descontos", "Steam · ou gg.deals no navegador", { href: "https://gg.deals/", label: "Ver no gg.deals" })}
-          ${bestDeals}
-        </div>
+    return `<div class="gwd-store" data-board="loja">
+      <div class="board-tile" data-board-tile="wanted">
+        ${sectionHead("Mais desejados na Steam", "ranking público da loja")}
+        ${scrollRow(popularCards)}
+      </div>
+      <div class="board-tile" data-board-tile="popular">
+        ${sectionHead("Em evidência", ggBlocked ? "Steam · gg.deals indisponível neste celular" : "loja · capas da Steam", { href: "https://gg.deals/", label: "Abrir gg.deals" })}
+        ${scrollRow(ggCards || popularCards)}
+      </div>
+      <div class="board-tile" data-board-tile="steam">
+        ${sectionHead("Descontos e eventos da Steam", "promoções do dia · toque abre a Steam")}
+        ${scrollRow(dealCards)}
+      </div>
+      <div class="board-tile" data-board-tile="newdeals">
+        ${sectionHead("Ofertas", "Steam store · toque abre o app da Steam", { href: "https://store.steampowered.com/specials/", label: "Especiais Steam" })}
+        ${newDeals}
+      </div>
+      <div class="board-tile" data-board-tile="bestdeals">
+        ${sectionHead("Melhores descontos", "Steam · ou gg.deals no navegador", { href: "https://gg.deals/", label: "Ver no gg.deals" })}
+        ${bestDeals}
       </div>
     </div>`;
   }
@@ -1190,12 +1349,14 @@
     const comingCount = games.filter((game) => game.unreleased).length;
     const saleCount = games.filter((game) => !game.unreleased && Number(game.discount) > 0).length;
     const fullCount = games.filter((game) => !game.unreleased && !Number(game.discount)).length;
-    const aaCount = games.filter((game) => game.earlyAccess).length;
+    const eaCount = games.filter((game) => game.earlyAccess).length;
     const skipped = new Set((cache.skippedIds || []).map(Number));
     const libraryGames = (cache.libraryGames || []).filter((game) => !skipped.has(Number(game.appId)));
     const skippedGames = (cache.skippedGames || []).length
       ? cache.skippedGames
       : (cache.libraryGames || []).filter((game) => skipped.has(Number(game.appId)));
+    applyLibraryReviews(libraryGames);
+    applyLibraryReviews(skippedGames);
     return {
       steamId: settings.steamId,
       profileUrl: settings.profileUrl,
@@ -1206,6 +1367,11 @@
       notifySales: settings.notifySales,
       notifyNews: settings.notifyNews,
       theme: normalizeTheme(settings.theme),
+      layout: settings.layout && typeof settings.layout === "object" ? settings.layout : {},
+      libraryLists:
+        settings.libraryLists && typeof settings.libraryLists === "object"
+          ? settings.libraryLists
+          : { lists: [], pins: {} },
       timezone: settings.timezone || "America/Sao_Paulo",
       appVersion: APP_VERSION,
       apkUrl: APK_RELEASES_URL,
@@ -1220,7 +1386,7 @@
       onSale: saleCount,
       comingCount,
       fullCount,
-      aaCount,
+      eaCount,
       backlogOpen: libraryGames.length,
       backlogDone: skippedGames.length,
       libraryGames,
@@ -1243,6 +1409,7 @@
       games,
       mobile: true,
       paired: isPaired(),
+      seededFromPc: Boolean(cache.seededFromPc),
       pcHost: settings.pcBaseUrl || "",
     };
   }
@@ -1299,16 +1466,20 @@
     };
   }
 
-  async function syncNow() {
+  async function syncNow(options = {}) {
     await bootPromise;
     if (syncing) return { ok: false, message: "Já está sincronizando." };
-    if (isPaired()) {
+    const reseed = Boolean(options.reseed);
+
+    if (isPaired() && (reseed || !cache.seededFromPc)) {
       syncing = true;
-      syncProgress = { percent: 15, label: "PC" };
-      emitSync({ syncing: true, percent: 15, label: "PC" });
+      syncProgress = { percent: 20, label: "PC" };
+      emitSync({ syncing: true, percent: 20, label: "espelho do PC" });
       try {
-        emitSync({ syncing: true, percent: 40, label: "PC" });
         const state = await pullPcState();
+        cache.seededFromPc = true;
+        cache.fromPc = true;
+        await persistCache();
         syncing = false;
         syncProgress = null;
         emitSync({ syncing: false, state });
@@ -1321,7 +1492,22 @@
         return { ok: false, message, state: getStateSync() };
       }
     }
+
+    if (isPaired()) {
+      emitSync({ syncing: true, percent: 8, label: "marcas" });
+      try {
+        await syncMarksWithPc();
+      } catch {
+        // PC off: segue com o que está neste celular
+      }
+    }
+
     if (!settings.steamId && !settings.profileUrl) {
+      if (cache.seededFromPc) {
+        const state = getStateSync();
+        emitSync({ syncing: false, state });
+        return { ok: true, state };
+      }
       return { ok: false, message: "Conecte a Steam antes de sincronizar." };
     }
     syncing = true;
@@ -1427,6 +1613,8 @@
         skippedGames: library.skippedGames,
         libraryMeta: library.libraryMeta,
         lastSyncAt: nowIso(),
+        fromPc: false,
+        seededFromPc: cache.seededFromPc || isPaired(),
       };
       await persistCache();
       syncing = false;
@@ -1462,6 +1650,12 @@
     if (partial.notifySales != null) next.notifySales = Boolean(partial.notifySales);
     if (partial.notifyNews != null) next.notifyNews = Boolean(partial.notifyNews);
     if (partial.theme != null) next.theme = normalizeTheme({ ...next.theme, ...partial.theme, tabs: { ...next.theme.tabs, ...(partial.theme.tabs || {}) } });
+    if (partial.layout != null && typeof partial.layout === "object" && !Array.isArray(partial.layout)) {
+      next.layout = partial.layout;
+    }
+    if (partial.libraryLists != null && typeof partial.libraryLists === "object" && !Array.isArray(partial.libraryLists)) {
+      next.libraryLists = partial.libraryLists;
+    }
     if (partial.pcBaseUrl != null) next.pcBaseUrl = normalizePcBase(partial.pcBaseUrl);
     if (partial.pairCode != null) next.pairCode = String(partial.pairCode).replace(/\D/g, "").slice(0, 6);
     settings = mergeSettings(next);
@@ -1531,16 +1725,12 @@
     await persistCache();
     if (!isPaired()) return getStateSync();
     try {
-      await pcFetch("POST", "/skip", { appId, skipped: Boolean(payload.skipped) });
-      const remote = await pcFetch("GET", "/state");
-      applyPcState(remote);
+      const marks = await pcFetch("POST", "/skip", { appId, skipped: Boolean(payload.skipped) });
       cache.pendingSkips = (cache.pendingSkips || []).filter((item) => Number(item.appId) !== appId);
+      if (marks && Array.isArray(marks.skippedAppIds)) applyRemoteMarks(marks.skippedAppIds);
       await persistCache();
-      await persistSettings();
       return getStateSync();
-    } catch (error) {
-      const message = error.message || PC_OFF_MSG;
-      emitSync({ error: message, state: getStateSync() });
+    } catch {
       return getStateSync();
     }
   }
@@ -1555,11 +1745,17 @@
     settings.pcBaseUrl = base;
     settings.pairCode = pin;
     await persistSettings();
+    cache.seededFromPc = false;
+    await persistCache();
     try {
       return await pullPcState();
     } catch (error) {
       throw new Error(error.message || PC_OFF_MSG);
     }
+  }
+
+  async function reseedFromPc() {
+    return syncNow({ reseed: true });
   }
 
   async function disconnectPc() {
@@ -1604,6 +1800,7 @@
     toggleSkipped,
     connectPc,
     disconnectPc,
+    reseedFromPc,
     hide: () => {},
     openUrl,
     onSync: (handler) => {
@@ -1636,6 +1833,14 @@
           await persistSettings();
           emitSync({ syncing: false, state: getStateSync() });
           syncNow().catch(() => {});
+        });
+        App.addListener("appStateChange", (event) => {
+          if (!event?.isActive) return;
+          const hours = Math.max(1, Number(settings.syncEveryHours) || 12);
+          const last = Date.parse(cache.lastSyncAt || 0);
+          if (!last || Date.now() - last >= hours * 60 * 60 * 1000) {
+            syncNow().catch(() => {});
+          }
         });
       } catch {
         // sem deep link

@@ -8,6 +8,10 @@ const APP_TITLE = "Minha Loja dos Desejos";
 // this app instead of electron.exe / Windows Script Host.
 app.setAppUserModelId("dev.steamcontroles.app");
 app.setName(APP_TITLE);
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+app.commandLine.appendSwitch("disable-blink-features", "AutomationControlled");
+app.commandLine.appendSwitch("exclude-switches", "enable-automation");
 
 process.env.STEAM_CONTROLES_HOME = app.isPackaged
   ? app.getPath("userData")
@@ -18,8 +22,17 @@ const { run } = require("../Scripts/updateWishlist");
 const { loginWithSteam } = require("../Scripts/steamLogin");
 const { isUnreleased, updatesBanner, storePageHtml } = require("../Scripts/dashboard");
 const { detectEarlyAccess } = require("../Scripts/steamApi");
-const { loadLibraryLists, toggleSkipped } = require("../Scripts/backlog");
+const { loadLibraryLists, toggleSkipped, fillLibraryReviews } = require("../Scripts/backlog");
 const { startPhoneLink, stopPhoneLink, restorePhoneLink, getPhoneLinkStatus } = require("./phoneLink");
+const { setHtmlFetcher } = require("../Scripts/ggDeals");
+const { fetchHtml } = require("./browserFetch");
+const {
+  hydrateUserData,
+  mirrorUserData,
+  mirrorRoot,
+  buildExportPayload,
+  applyImportPayload,
+} = require("../Scripts/userBackup");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const APP_AUMID = "dev.steamcontroles.app";
@@ -27,14 +40,36 @@ const APP_VERSION = require("../package.json").version;
 const APK_RELEASES_URL = "https://github.com/CristopherBauler/SteamControles/releases";
 
 const HOUR_MS = 60 * 60 * 1000;
+const STORE_MS = 30 * 60 * 1000;
 let mainWindow = null;
 let tray = null;
 let syncing = false;
 let syncProgress = null;
 let lastProgressSentAt = 0;
 let syncTimer = null;
+let storeTimer = null;
 let lastSyncAt = null;
+let lastStoreAt = null;
 let nextSyncAt = null;
+let nextStoreAt = null;
+let libraryReviewJob = null;
+
+function kickLibraryReviews(config, library) {
+  if (libraryReviewJob) return;
+  const games = [...(library?.open || []), ...(library?.done || [])];
+  if (!games.length) return;
+  libraryReviewJob = fillLibraryReviews(config, games)
+    .then((changed) => {
+      if (!changed || !mainWindow || mainWindow.isDestroyed()) return;
+      return getState().then((state) => {
+        mainWindow.webContents.send("sync-status", { syncing: false, state });
+      });
+    })
+    .catch(() => {})
+    .finally(() => {
+      libraryReviewJob = null;
+    });
+}
 
 function iconFiles() {
   return {
@@ -402,7 +437,7 @@ function rebuildTray() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: `Abrir ${APP_TITLE}`, click: showWindow },
-      { label: syncing ? "Sincronizando…" : "Atualizar agora", enabled: !syncing, click: () => syncNow({ manual: true }) },
+      { label: syncing ? "Sincronizando…" : "Atualizar agora", enabled: !syncing, click: () => syncNow({ manual: true, scope: "full" }) },
       { label: next, enabled: false },
       { type: "separator" },
       {
@@ -431,6 +466,7 @@ async function getState() {
   });
   const ggDeals = await readJson(config.paths.ggDeals, { newDeals: [], bestDeals: [] });
   const library = await loadLibraryLists(config);
+  kickLibraryReviews(config, library);
   const games = (wishlist.games || []).filter((game) => game.onWishlist !== false);
   const wishAll = games.map((game) => {
     const unreleased = isUnreleased(game);
@@ -452,7 +488,7 @@ async function getState() {
   const comingCount = wishAll.filter((game) => game.unreleased).length;
   const saleCount = wishAll.filter((game) => !game.unreleased && Number(game.discount) > 0).length;
   const fullCount = wishAll.filter((game) => !game.unreleased && !Number(game.discount)).length;
-  const aaCount = wishAll.filter((game) => game.earlyAccess).length;
+  const eaCount = wishAll.filter((game) => game.earlyAccess).length;
   return {
     steamId: config.steamId,
     profileUrl: config.profileUrl,
@@ -463,6 +499,9 @@ async function getState() {
     notifySales: config.notifySales,
     notifyNews: config.notifyNews,
     theme: normalizeTheme(config.theme),
+    layout: config.layout && typeof config.layout === "object" ? config.layout : {},
+    libraryLists:
+      config.libraryLists && typeof config.libraryLists === "object" ? config.libraryLists : { lists: [], pins: {} },
     timezone: config.timezone || "America/Sao_Paulo",
     appVersion: APP_VERSION,
     apkUrl: APK_RELEASES_URL,
@@ -470,14 +509,17 @@ async function getState() {
     syncPercent: syncing ? syncProgress?.percent ?? 0 : null,
     syncLabel: syncing ? syncProgress?.label || "" : "",
     lastSyncAt,
+    lastStoreAt,
     nextSyncAt,
+    nextStoreAt,
     packaged: app.isPackaged,
-    dataPath: process.env.STEAM_CONTROLES_HOME,
+    dataPath: "",
+    backupPath: mirrorRoot(),
     wishCount: wishAll.length,
     onSale: saleCount,
     comingCount,
     fullCount,
-    aaCount,
+    eaCount,
     backlogOpen: library.open.length,
     backlogDone: library.done.length,
     libraryGames: library.open,
@@ -540,6 +582,12 @@ async function saveSettings(partial) {
       tabs: { ...(next.theme && next.theme.tabs), ...(partial.theme.tabs || {}) },
     });
   }
+  if (partial.layout != null && typeof partial.layout === "object" && !Array.isArray(partial.layout)) {
+    next.layout = partial.layout;
+  }
+  if (partial.libraryLists != null && typeof partial.libraryLists === "object" && !Array.isArray(partial.libraryLists)) {
+    next.libraryLists = partial.libraryLists;
+  }
   if (!app.isPackaged) {
     // keep vault paths when running from the repo
   } else {
@@ -549,6 +597,7 @@ async function saveSettings(partial) {
   await writeJson(CONFIG_PATH, next);
   applyOpenAtLogin(next.startWithWindows);
   scheduleSync(next.syncEveryHours);
+  await mirrorUserData(await loadConfig());
   return getState();
 }
 
@@ -567,10 +616,19 @@ function scheduleSync(hours) {
   const ms = Math.max(1, Number(hours) || 12) * HOUR_MS;
   if (syncTimer) clearInterval(syncTimer);
   syncTimer = setInterval(() => {
-    syncNow({ manual: false }).catch(() => {});
+    syncNow({ manual: false, scope: "full" }).catch(() => {});
   }, ms);
   nextSyncAt = Date.now() + ms;
+  scheduleStoreSync();
   rebuildTray();
+}
+
+function scheduleStoreSync() {
+  if (storeTimer) clearInterval(storeTimer);
+  storeTimer = setInterval(() => {
+    syncNow({ manual: false, scope: "store" }).catch(() => {});
+  }, STORE_MS);
+  nextStoreAt = Date.now() + STORE_MS;
 }
 
 function notifySync(config, result) {
@@ -599,29 +657,43 @@ function notifySync(config, result) {
   }
 }
 
-async function syncNow({ manual } = {}) {
+async function syncNow({ manual, scope = "full" } = {}) {
   if (syncing) return { ok: false, message: "Já está sincronizando." };
   const config = await loadConfig();
-  if (!config.steamId && !config.profileUrl) {
-    return { ok: false, message: "Conecte a Steam antes de sincronizar." };
+  const storeOnly = scope === "store";
+  if (!storeOnly && !config.steamId && !config.profileUrl) {
+    return { ok: false, message: "Conecte a Steam antes de sincronizar a wishlist." };
   }
   syncing = true;
-  syncProgress = { phase: "wishlist", label: "wishlist", current: 0, total: 0, percent: 0 };
+  syncProgress = {
+    phase: storeOnly ? "loja" : "wishlist",
+    label: storeOnly ? "loja" : "wishlist",
+    current: 0,
+    total: 0,
+    percent: 0,
+  };
   lastProgressSentAt = 0;
   rebuildTray();
   sendSyncProgress({ force: true });
   try {
     const result =
       (await run({
+        scope: storeOnly ? "store" : "full",
         onProgress: (payload) => applySyncProgress(payload),
       })) || {};
-    lastSyncAt = new Date().toISOString();
-    scheduleSync(config.syncEveryHours);
-    if (!manual) notifySync(config, result);
-    else {
+    lastStoreAt = new Date().toISOString();
+    nextStoreAt = Date.now() + STORE_MS;
+    if (!storeOnly) {
+      lastSyncAt = lastStoreAt;
+      scheduleSync(config.syncEveryHours);
+    }
+    if (!manual && !storeOnly) notifySync(config, result);
+    else if (manual) {
       new Notification({
         title: APP_TITLE,
-        body: `Atualizado · ${result.wishCount || 0} jogos na wishlist.`,
+        body: storeOnly
+          ? "Loja atualizada."
+          : `Atualizado · ${result.wishCount || 0} jogos na wishlist.`,
       }).show();
     }
     syncing = false;
@@ -632,7 +704,9 @@ async function syncNow({ manual } = {}) {
   } catch (error) {
     const message = error.stack || error.message || String(error);
     if (mainWindow) mainWindow.webContents.send("sync-status", { syncing: false, error: message });
-    new Notification({ title: APP_TITLE, body: "A sincronização falhou. Abra o app para ver o erro." }).show();
+    if (!storeOnly) {
+      new Notification({ title: APP_TITLE, body: "A sincronização falhou. Abra o app para ver o erro." }).show();
+    }
     return { ok: false, message };
   } finally {
     syncing = false;
@@ -678,7 +752,8 @@ ipcMain.handle("steam-login", async () => {
   return saveSettings({ steamId });
 });
 ipcMain.handle("logout", () => saveSettings({ steamId: "", profileUrl: "" }));
-ipcMain.handle("sync-now", () => syncNow({ manual: true }));
+ipcMain.handle("sync-now", () => syncNow({ manual: true, scope: "full" }));
+ipcMain.handle("sync-store", () => syncNow({ manual: true, scope: "store" }));
 ipcMain.handle("toggle-skipped", async (_event, payload = {}) => {
   const config = await loadConfig();
   await toggleSkipped(config, payload.appId, payload.skipped);
@@ -703,6 +778,42 @@ ipcMain.handle("pick-icon", async () => {
 ipcMain.handle("phone-link-status", () => getPhoneLinkStatus());
 ipcMain.handle("phone-link-start", () => startPhoneLink(getStateForPhone, applyPhoneSkip));
 ipcMain.handle("phone-link-stop", () => stopPhoneLink());
+ipcMain.handle("export-backup", async () => {
+  const config = await loadConfig();
+  const payload = await buildExportPayload(config);
+  const result = await dialog.showSaveDialog(mainWindow || undefined, {
+    title: "Exportar cópia das marcações",
+    defaultPath: `minha-loja-backup-${new Date().toISOString().slice(0, 10)}.json`,
+    filters: [{ name: "Cópia do app", extensions: ["json"] }],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  const fsPromises = require("fs/promises");
+  await fsPromises.writeFile(result.filePath, JSON.stringify(payload, null, 2), "utf8");
+  return { ok: true, path: result.filePath, skipped: payload.backlogDone?.appIds?.length || 0 };
+});
+ipcMain.handle("import-backup", async () => {
+  const result = await dialog.showOpenDialog(mainWindow || undefined, {
+    title: "Restaurar cópia",
+    properties: ["openFile"],
+    filters: [{ name: "Cópia do app", extensions: ["json"] }],
+  });
+  if (result.canceled || !result.filePaths[0]) return { ok: false, canceled: true };
+  const fsPromises = require("fs/promises");
+  const raw = JSON.parse(await fsPromises.readFile(result.filePaths[0], "utf8"));
+  const config = await loadConfig();
+  const applied = await applyImportPayload(config, raw);
+  await saveSettings({
+    steamId: raw.steamId || config.steamId,
+    profileUrl: raw.profileUrl || config.profileUrl,
+    syncEveryHours: raw.syncEveryHours || config.syncEveryHours,
+    startWithWindows: raw.startWithWindows,
+    notifySales: raw.notifySales,
+    notifyNews: raw.notifyNews,
+    theme: raw.theme,
+    ...(raw.steamWebApiKey ? { steamWebApiKey: raw.steamWebApiKey } : {}),
+  });
+  return { ok: true, skipped: applied.skipped };
+});
 ipcMain.handle("reset-icon", async () => {
   const fallback = iconFiles().fallback;
   if (!fs.existsSync(fallback)) {
@@ -727,16 +838,21 @@ if (!gotLock) {
 } else {
   app.on("second-instance", showWindow);
   app.whenReady().then(async () => {
+    setHtmlFetcher(fetchHtml);
     ensureWindowsIcon();
     await createAppShortcuts().catch(() => {});
     createWindow();
     createTray();
     const config = await loadConfig();
+    await hydrateUserData(config).catch(() => {});
+    await mirrorUserData(config).catch(() => {});
     applyOpenAtLogin(config.startWithWindows);
     scheduleSync(config.syncEveryHours);
     restorePhoneLink(getStateForPhone, applyPhoneSkip).catch(() => {});
     if (config.steamId || config.profileUrl) {
-      setTimeout(() => syncNow({ manual: false }).catch(() => {}), 8000);
+      setTimeout(() => syncNow({ manual: false, scope: "full" }).catch(() => {}), 8000);
+    } else {
+      setTimeout(() => syncNow({ manual: false, scope: "store" }).catch(() => {}), 5000);
     }
   });
 }

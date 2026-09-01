@@ -185,6 +185,55 @@ function skipChangesFromBody(body) {
     .filter((item) => Number.isInteger(item.appId) && item.appId > 0);
 }
 
+function compactGame(game) {
+  if (!game || typeof game !== "object") return null;
+  const appId = Number(game.appId);
+  if (!Number.isInteger(appId) || appId <= 0) return null;
+  return {
+    appId,
+    name: game.name || `App ${appId}`,
+    headerImage: game.headerImage || game.cover || "",
+    cover: game.cover || game.headerImage || "",
+    currentPrice: game.currentPrice ?? null,
+    discount: Number(game.discount) || 0,
+    storeUrl: game.storeUrl || "",
+    hours: Number(game.hours) || 0,
+    family: Boolean(game.family),
+    reviewPercent: game.reviewPercent != null && Number.isFinite(Number(game.reviewPercent)) ? Number(game.reviewPercent) : null,
+    reviewTotal: Number(game.reviewTotal) || 0,
+    unreleased: Boolean(game.unreleased),
+    comingSoon: Boolean(game.comingSoon),
+    isFree: Boolean(game.isFree),
+    earlyAccess: Boolean(game.earlyAccess),
+    releaseDate: game.releaseDate || "",
+    priceLabel: game.priceLabel || "",
+    genres: Array.isArray(game.genres) ? game.genres : undefined,
+  };
+}
+
+function compactList(list) {
+  return (Array.isArray(list) ? list : []).map(compactGame).filter(Boolean);
+}
+
+function skippedAppIdsFrom(state) {
+  const src = state && typeof state === "object" ? state : {};
+  const fromGames = compactList(src.skippedGames).map((game) => game.appId);
+  const extra = Array.isArray(src.skippedAppIds) ? src.skippedAppIds.map(Number) : [];
+  return [...new Set([...fromGames, ...extra].filter((id) => id > 0))];
+}
+
+function marksPayload(state) {
+  const src = state && typeof state === "object" ? state : {};
+  return {
+    ok: true,
+    steamId: src.steamId || "",
+    profileUrl: src.profileUrl || "",
+    theme: src.theme,
+    skippedAppIds: skippedAppIdsFrom(src),
+    lastSyncAt: src.lastSyncAt || null,
+  };
+}
+
 function sanitizeState(state) {
   const src = state && typeof state === "object" ? state : {};
   return {
@@ -205,16 +254,18 @@ function sanitizeState(state) {
     onSale: src.onSale,
     comingCount: src.comingCount,
     fullCount: src.fullCount,
-    aaCount: src.aaCount,
+    eaCount: src.eaCount ?? src.aaCount,
     backlogOpen: src.backlogOpen,
     backlogDone: src.backlogDone,
-    libraryGames: src.libraryGames || [],
-    skippedGames: src.skippedGames || [],
+    libraryGames: compactList(src.libraryGames),
+    skippedGames: compactList(src.skippedGames),
     libraryMeta: src.libraryMeta || {},
     novidadesHtml: src.novidadesHtml || "",
     lojaHtml: src.lojaHtml || "",
-    games: src.games || [],
+    games: compactList(src.games),
+    skippedAppIds: skippedAppIdsFrom(src),
     fromPc: true,
+    seed: true,
   };
 }
 
@@ -268,6 +319,14 @@ async function onRequest(req, res) {
     }
     return;
   }
+  if ((url.pathname === "/marks" || url.pathname === "/skips") && method === "GET") {
+    try {
+      send(res, 200, marksPayload(await getStateFn()));
+    } catch (error) {
+      send(res, 500, { ok: false, error: error.message || String(error) });
+    }
+    return;
+  }
   if ((url.pathname === "/skip" || url.pathname === "/skips") && method === "POST") {
     let body;
     try {
@@ -280,8 +339,7 @@ async function onRequest(req, res) {
       for (const change of skipChangesFromBody(body)) {
         await applySkipFn(change.appId, change.skipped);
       }
-      const state = sanitizeState(await getStateFn());
-      send(res, 200, state);
+      send(res, 200, marksPayload(await getStateFn()));
     } catch (error) {
       send(res, 500, { ok: false, error: error.message || String(error) });
     }
@@ -299,7 +357,7 @@ function statusPayload() {
     ips,
     urls: enabled ? ips.map(pairUrl) : [],
     hint:
-      "Código só no pareamento. Depois é só Atualizar agora nos dois (mesmo Wi‑Fi) — marcas de Não vou jogar também. Se o celular não achar o PC, no Firewall do Windows permita Node.js / Electron na rede privada. Não abra esta porta na internet.",
+      "Primeira vez: o celular puxa o PC inteiro. Depois cada um atualiza a Steam sozinho. Marcas de Não vou jogar sobem e descem neste Wi‑Fi. Firewall: permita o app na rede privada. Não abra esta porta na internet.",
   };
 }
 

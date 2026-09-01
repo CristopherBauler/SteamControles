@@ -40,6 +40,8 @@ const DEFAULT_CONFIG = {
   notifySales: true,
   notifyNews: true,
   theme: { ...DEFAULT_THEME, tabs: { ...DEFAULT_THEME.tabs } },
+  layout: {},
+  libraryLists: { lists: [], pins: {} },
 };
 
 function normalizeHex(value, fallback) {
@@ -84,12 +86,8 @@ async function writeJson(filePath, data) {
 async function loadConfig() {
   let config = await readJson(CONFIG_PATH, null);
   if (!config) {
-    if (process.env.STEAM_CONTROLES_HOME) {
-      config = { ...DEFAULT_CONFIG };
-      await writeJson(CONFIG_PATH, config);
-    } else {
-      throw new Error(`Arquivo de configuração não encontrado: ${CONFIG_PATH}`);
-    }
+    config = { ...DEFAULT_CONFIG };
+    await writeJson(CONFIG_PATH, config);
   }
 
   const vaultPath = config.vaultPath || (process.env.STEAM_CONTROLES_HOME ? PROJECT_ROOT : path.resolve(PROJECT_ROOT, ".."));
@@ -115,6 +113,11 @@ async function loadConfig() {
     notifySales: config.notifySales !== false,
     notifyNews: config.notifyNews !== false,
     theme: normalizeTheme(config.theme),
+    layout: config.layout && typeof config.layout === "object" && !Array.isArray(config.layout) ? config.layout : {},
+    libraryLists:
+      config.libraryLists && typeof config.libraryLists === "object" && !Array.isArray(config.libraryLists)
+        ? config.libraryLists
+        : { lists: [], pins: {} },
     paths: {
       root: base,
       config: CONFIG_PATH,
@@ -134,6 +137,7 @@ async function loadConfig() {
       ownedPlaytimes: path.join(base, "Data", "ownedPlaytimes.json"),
       backlogDone: path.join(base, "Data", "backlogDone.json"),
       backlogTracked: path.join(base, "Data", "backlogTracked.json"),
+      libraryReviews: path.join(base, "Data", "libraryReviews.json"),
       dashboardNote: path.join(base, "Dashboard", "Steam Wishlist Dashboard.md"),
       backlogNote: path.join(base, "Dashboard", "Backlog Steam.md"),
       skippedNote: path.join(base, "Dashboard", "Não vou jogar.md"),

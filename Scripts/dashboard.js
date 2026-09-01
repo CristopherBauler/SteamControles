@@ -7,6 +7,7 @@ const fs = require("fs/promises");
 const path = require("path");
 const { formatBRL, readJson } = require("./config");
 const { resolveDealLists } = require("./ggDeals");
+const { capsuleUrl } = require("./steamApi");
 
 function esc(value) {
   return String(value ?? "")
@@ -43,7 +44,27 @@ function badgeText(iso, timezone) {
 const PRICE_COLOR = { queda: "#3dd68c", alta: "#ff6b6b", igual: "#4da3ff" };
 
 function cover(game) {
-  return game?.headerImage || game?.image || "";
+  const raw = String(game?.headerImage || game?.image || "");
+  if (raw && !/img\.gg\.deals/i.test(raw)) return raw;
+  const id = Number(game?.appId);
+  if (Number.isInteger(id) && id > 0) return capsuleUrl(id);
+  return "";
+}
+
+function dealThumb(game) {
+  const img = cover(game);
+  const id = Number(game?.appId);
+  const fallback =
+    Number.isInteger(id) && id > 0
+      ? `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`
+      : "";
+  if (!img && !fallback) return `<div class="gwd-deal-ph"></div>`;
+  const src = img || fallback;
+  const next = src === fallback ? "" : fallback;
+  const err = next
+    ? ` data-fallback="${esc(next)}" onerror="dealCoverError(this)"`
+    : ` onerror="dealCoverError(this)"`;
+  return `<img src="${esc(src)}" alt="" referrerpolicy="no-referrer"${err}>`;
 }
 
 function check(owned) {
@@ -207,15 +228,11 @@ function dealPrice(game) {
 }
 
 function dealRow(game) {
-  const img = cover(game);
-  const thumb = img
-    ? `<img src="${esc(img)}" alt="">`
-    : `<div class="gwd-deal-ph"></div>`;
   const href = game.ggDealsUrl || "#";
   const meta = [game.store || game.source || "gg.deals", game.relativeTime].filter(Boolean).join(" · ");
   const hl = game.historicalLow ? `<span class="gwd-hl" title="Historical low">HL</span>` : "";
   return `<a class="gwd-deal" href="${esc(href)}">
-    ${thumb}
+    ${dealThumb(game)}
     <div class="gwd-deal-main">
       <div class="gwd-deal-name">${check(game.owned)}${esc(game.name)}</div>
       <div class="gwd-deal-src">${esc(meta)}</div>
@@ -288,14 +305,15 @@ function updateCard(event, timezone) {
   </a>`;
 }
 
-function updatesColumn(title, events, timezone, empty) {
+function updatesColumn(title, events, timezone, empty, tileId) {
+  const id = tileId ? ` data-board-tile="${esc(tileId)}"` : "";
   if (!events.length) {
-    return `<div class="gwd-updates-col">
+    return `<div class="gwd-updates-col board-tile"${id}>
       <div class="gwd-updates-col-head">${esc(title)}</div>
       <div class="gwd-updates-quiet">${esc(empty)}</div>
     </div>`;
   }
-  return `<div class="gwd-updates-col">
+  return `<div class="gwd-updates-col board-tile"${id}>
     <div class="gwd-updates-col-head">${esc(title)} <span>${events.length}</span></div>
     <div class="gwd-upd-day-list">${events.map((event) => updateCard(event, timezone)).join("")}</div>
   </div>`;
@@ -309,20 +327,18 @@ function updatesBanner(events, timezone) {
   if (!patches.length && !news.length && !promos.length) {
     return `<div class="gwd-updates gwd-updates-quiet">Nenhuma atualização na wishlist nos últimos 7 dias.</div>`;
   }
-  return `<div class="gwd-updates">
+  return `<div class="gwd-updates" data-board="novidades">
     <div class="gwd-updates-head">Novidades da wishlist</div>
-    <div class="gwd-updates-hint">últimos 7 dias · patches à esquerda · notícias à direita · promoções embaixo</div>
-    <div class="gwd-updates-cols">
-      ${updatesColumn("Atualizações", patches, timezone, "Nenhum patch ou lançamento nesta semana.")}
-      ${updatesColumn("Notícias", news, timezone, "Nenhuma notícia nesta semana.")}
-    </div>
+    <div class="gwd-updates-hint">últimos 7 dias · arraste as seções e mude o tamanho</div>
+    ${updatesColumn("Atualizações", patches, timezone, "Nenhum patch ou lançamento nesta semana.", "patches")}
+    ${updatesColumn("Notícias", news, timezone, "Nenhuma notícia nesta semana.", "news")}
     ${
       promos.length
-        ? `<div class="gwd-updates-promo">
+        ? `<div class="gwd-updates-promo board-tile" data-board-tile="promos">
       <div class="gwd-updates-col-head">Promoções <span>${promos.length}</span></div>
       <div class="gwd-upd-day-list">${promos.map((event) => updateCard(event, timezone)).join("")}</div>
     </div>`
-        : `<div class="gwd-updates-promo">
+        : `<div class="gwd-updates-promo board-tile" data-board-tile="promos">
       <div class="gwd-updates-col-head">Promoções</div>
       <div class="gwd-updates-quiet">Nenhuma promoção nesta semana.</div>
     </div>`
@@ -380,24 +396,33 @@ function storePageHtml({
   const usdNote = storeHub.ggDealsUsd
     ? `<div class="gwd-empty">Preços como no gg.deals (muitos em USD). A ordem das listas é a do site.</div>`
     : "";
-  return `<div class="gwd-store">
-    ${sectionHead("Mais desejados na Steam", "ranking público da loja · inclui os que você já tem")}
-    ${scrollRow(popularCards)}
-    ${sectionHead("Most Popular Games", "gg.deals · capas da página da Steam")}
-    ${scrollRow(ggCards)}
-    ${sectionHead("Descontos e eventos da Steam", "promoções do dia · role para o lado")}
-    ${scrollRow(dealCards)}
-    <div class="gwd-deals-cols">
-      <div class="gwd-deals-col">
-        ${sectionHead("New deals", "gg.deals · New deals", ggLink)}
-        ${newDeals}
-      </div>
-      <div class="gwd-deals-col">
-        ${sectionHead("Best deals", "gg.deals · Best deals", ggLink)}
-        ${bestDeals}
-      </div>
+  const stale =
+    ggDeals.scraped === false || storeHub.ggDealsScraped === false
+      ? `<div class="gwd-empty">gg.deals bloqueou a leitura agora — mostrando o último ranking que entrou. A Loja tenta de novo sozinha a cada 30 min.</div>`
+      : "";
+  return `<div class="gwd-store" data-board="loja">
+    <div class="board-tile" data-board-tile="wanted">
+      ${sectionHead("Mais desejados na Steam", "ranking público da loja · inclui os que você já tem")}
+      ${scrollRow(popularCards)}
+    </div>
+    <div class="board-tile" data-board-tile="popular">
+      ${sectionHead("Most Popular Games", "gg.deals · capas da página da Steam")}
+      ${scrollRow(ggCards)}
+    </div>
+    <div class="board-tile" data-board-tile="steam">
+      ${sectionHead("Descontos e eventos da Steam", "promoções do dia · role para o lado")}
+      ${scrollRow(dealCards)}
+    </div>
+    <div class="board-tile" data-board-tile="newdeals">
+      ${sectionHead("New deals", "gg.deals · New deals", ggLink)}
+      ${newDeals}
+    </div>
+    <div class="board-tile" data-board-tile="bestdeals">
+      ${sectionHead("Best deals", "gg.deals · Best deals", ggLink)}
+      ${bestDeals}
     </div>
     ${usdNote}
+    ${stale}
   </div>`;
 }
 

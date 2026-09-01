@@ -217,7 +217,7 @@ function genreLooksEarlyAccess(item) {
 
 function detectEarlyAccess(data) {
   if (!data || typeof data !== "object") return false;
-  // Gênero 70 da Steam é a fonte. Tags/categorias "Early Access" ficam depois que o jogo sai do AA.
+  // Gênero 70 da Steam é a fonte. Tags/categorias "Early Access" ficam depois que o jogo sai do EA.
   if (Array.isArray(data.genres)) {
     return data.genres.some(genreLooksEarlyAccess);
   }

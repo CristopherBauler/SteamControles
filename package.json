@@ -16,6 +16,7 @@
     "install:scheduler": "powershell -ExecutionPolicy Bypass -File Scripts/installScheduler.ps1",
     "app": "electron .",
     "app:build": "electron-builder --win portable",
+    "docs:pdf": "electron Scripts/buildDocsPdf.js",
     "mobile:sync": "npm --prefix mobile run sync",
     "mobile:apk": "npm --prefix mobile run apk"
   },
