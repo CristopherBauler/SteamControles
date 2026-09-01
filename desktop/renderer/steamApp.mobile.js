@@ -43,6 +43,7 @@
     theme: { ...DEFAULT_THEME, tabs: { ...DEFAULT_THEME.tabs } },
     layout: {},
     libraryLists: { lists: [], pins: {} },
+    backlogSort: "hours",
     pendingSync: false,
     pcBaseUrl: "",
     pairCode: "",
@@ -1372,6 +1373,7 @@
         settings.libraryLists && typeof settings.libraryLists === "object"
           ? settings.libraryLists
           : { lists: [], pins: {} },
+      backlogSort: ["hours", "reviews", "name"].includes(settings.backlogSort) ? settings.backlogSort : "hours",
       timezone: settings.timezone || "America/Sao_Paulo",
       appVersion: APP_VERSION,
       apkUrl: APK_RELEASES_URL,
@@ -1655,6 +1657,9 @@
     }
     if (partial.libraryLists != null && typeof partial.libraryLists === "object" && !Array.isArray(partial.libraryLists)) {
       next.libraryLists = partial.libraryLists;
+    }
+    if (partial.backlogSort != null) {
+      next.backlogSort = ["hours", "reviews", "name"].includes(partial.backlogSort) ? partial.backlogSort : "hours";
     }
     if (partial.pcBaseUrl != null) next.pcBaseUrl = normalizePcBase(partial.pcBaseUrl);
     if (partial.pairCode != null) next.pairCode = String(partial.pairCode).replace(/\D/g, "").slice(0, 6);

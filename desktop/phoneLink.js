@@ -264,6 +264,7 @@ function sanitizeState(state) {
     lojaHtml: src.lojaHtml || "",
     games: compactList(src.games),
     skippedAppIds: skippedAppIdsFrom(src),
+    backlogSort: src.backlogSort,
     fromPc: true,
     seed: true,
   };

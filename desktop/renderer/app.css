@@ -461,6 +461,12 @@ h2 { margin: 18px 20px 8px; font-size: 15px; }
   gap: 2px;
   margin: 12px 20px 0;
 }
+.lib-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
 .lib-head h2 { margin: 0; }
 .page-search {
   margin: 10px 20px 8px;
@@ -728,9 +734,35 @@ h2 { margin: 18px 20px 8px; font-size: 15px; }
   font-weight: 700;
 }
 .lib-skipped .lib-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: center;
   background: #161b22;
   border-color: var(--border);
   color: #8b95a7;
+  cursor: default;
+}
+.lib-skipped .lib-card > input { align-self: center; }
+.lib-skipped .lib-card .lib-link {
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.lib-skipped .lib-card-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 6px;
+}
+.lib-skipped .lib-card-hours,
+.lib-skipped .lib-card-reviews {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 .lib-skipped .lib-card img,
 .lib-skipped .lib-cover-empty {
@@ -740,7 +772,11 @@ h2 { margin: 18px 20px 8px; font-size: 15px; }
   filter: grayscale(1);
   opacity: 0.55;
 }
-.lib-skipped .lib-name { color: #8b95a7; }
+.lib-skipped .lib-name {
+  color: #8b95a7;
+  width: 100%;
+  -webkit-line-clamp: 1;
+}
 
 @media (max-width: 860px) {
   .game-wishlist-dashboard .gwd-updates-cols,
@@ -1154,6 +1190,13 @@ body.capacitor {
   filter: blur(4px);
 }
 
+#tab-backlog .lib-sort {
+  --lib-border: color-mix(in srgb, var(--tab-backlog) 55%, var(--border));
+  --lib-title: var(--text);
+  --lib-card: var(--surface-2);
+  --lib-glow: var(--tab-backlog);
+  flex: 0 0 auto;
+}
 #tab-backlog .lib-head h2 {
   position: relative;
   display: inline-block;

@@ -502,6 +502,7 @@ async function getState() {
     layout: config.layout && typeof config.layout === "object" ? config.layout : {},
     libraryLists:
       config.libraryLists && typeof config.libraryLists === "object" ? config.libraryLists : { lists: [], pins: {} },
+    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
     timezone: config.timezone || "America/Sao_Paulo",
     appVersion: APP_VERSION,
     apkUrl: APK_RELEASES_URL,
@@ -588,6 +589,9 @@ async function saveSettings(partial) {
   if (partial.libraryLists != null && typeof partial.libraryLists === "object" && !Array.isArray(partial.libraryLists)) {
     next.libraryLists = partial.libraryLists;
   }
+  if (partial.backlogSort != null) {
+    next.backlogSort = ["hours", "reviews", "name"].includes(partial.backlogSort) ? partial.backlogSort : "hours";
+  }
   if (!app.isPackaged) {
     // keep vault paths when running from the repo
   } else {
@@ -631,29 +635,42 @@ function scheduleStoreSync() {
   nextStoreAt = Date.now() + STORE_MS;
 }
 
+function notificationIconPath() {
+  const files = iconFiles();
+  for (const file of [files.ico, files.png, files.fallback]) {
+    if (fs.existsSync(file)) return file;
+  }
+  return "";
+}
+
+function showToast(body) {
+  if (!Notification.isSupported()) {
+    return { ok: false, supported: false, message: "O Windows não está deixando este app mostrar avisos." };
+  }
+  const note = new Notification({
+    title: APP_TITLE,
+    body: String(body || ""),
+    icon: notificationIconPath() || undefined,
+  });
+  note.on("click", showWindow);
+  note.show();
+  return { ok: true, supported: true, message: "Aviso enviado. Se não apareceu no canto da tela, libere notificações para Minha Loja dos Desejos no Windows." };
+}
+
 function notifySync(config, result) {
-  if (!Notification.isSupported() || !result) return;
+  if (!result) return;
   const sales = (result.events || []).filter((event) => event.kind === "sale" || event.kind === "saleOff");
   const news = (result.events || []).filter((event) => event.kind === "news");
   if (config.notifySales && sales.length) {
-    new Notification({
-      title: APP_TITLE,
-      body: `${sales.length} promoção(ões) na wishlist.`,
-    }).show();
+    showToast(`${sales.length} promoção(ões) na wishlist.`);
     return;
   }
   if (config.notifyNews && news.length) {
-    new Notification({
-      title: APP_TITLE,
-      body: `${news.length} notícia(s) da wishlist nos últimos 7 dias.`,
-    }).show();
+    showToast(`${news.length} notícia(s) da wishlist nos últimos 7 dias.`);
     return;
   }
   if (result.freshCount) {
-    new Notification({
-      title: APP_TITLE,
-      body: `Wishlist atualizada · ${result.wishCount || 0} jogos.`,
-    }).show();
+    showToast(`Wishlist atualizada · ${result.wishCount || 0} jogos.`);
   }
 }
 
@@ -689,12 +706,9 @@ async function syncNow({ manual, scope = "full" } = {}) {
     }
     if (!manual && !storeOnly) notifySync(config, result);
     else if (manual) {
-      new Notification({
-        title: APP_TITLE,
-        body: storeOnly
-          ? "Loja atualizada."
-          : `Atualizado · ${result.wishCount || 0} jogos na wishlist.`,
-      }).show();
+      showToast(
+        storeOnly ? "Loja atualizada." : `Atualizado · ${result.wishCount || 0} jogos na wishlist.`
+      );
     }
     syncing = false;
     syncProgress = null;
@@ -705,7 +719,7 @@ async function syncNow({ manual, scope = "full" } = {}) {
     const message = error.stack || error.message || String(error);
     if (mainWindow) mainWindow.webContents.send("sync-status", { syncing: false, error: message });
     if (!storeOnly) {
-      new Notification({ title: APP_TITLE, body: "A sincronização falhou. Abra o app para ver o erro." }).show();
+      showToast("A sincronização falhou. Abra o app para ver o erro.");
     }
     return { ok: false, message };
   } finally {
@@ -810,6 +824,7 @@ ipcMain.handle("import-backup", async () => {
     notifySales: raw.notifySales,
     notifyNews: raw.notifyNews,
     theme: raw.theme,
+    backlogSort: raw.backlogSort,
     ...(raw.steamWebApiKey ? { steamWebApiKey: raw.steamWebApiKey } : {}),
   });
   return { ok: true, skipped: applied.skipped };

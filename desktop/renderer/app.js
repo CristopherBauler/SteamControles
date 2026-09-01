@@ -19,6 +19,9 @@ let libraryGames = [];
 let skippedGames = [];
 let libraryMeta = {};
 let libraryBusy = false;
+const BACKLOG_SORTS = ["hours", "reviews", "name"];
+const BACKLOG_SORT_KEY = "mld.backlogSort";
+let backlogSort = "hours";
 let savedTheme = { ...DEFAULT_THEME, tabs: { ...DEFAULT_THEME.tabs } };
 let themeDirty = false;
 
@@ -401,10 +404,22 @@ function libCard(game, skipped) {
   const img = covers.length
     ? `<img src="${esc(covers[0])}" alt="" draggable="false" loading="lazy" data-covers="${esc(covers.slice(1).join("|"))}" onerror="libCoverError(this)">`
     : `<span class="lib-cover-empty" aria-hidden="true"></span>`;
+  const link = `<a class="lib-link" href="${esc(game.storeUrl || "#")}" draggable="false">${img}<span class="lib-name">${esc(game.name || "")}</span></a>`;
+  if (skipped) {
+    const foot = reviews || family ? `<span class="lib-card-reviews">${reviews}${family}</span>` : "";
+    return `<article class="lib-card" data-app-id="${esc(game.appId)}">
+      <input type="checkbox" data-skip="${esc(game.appId)}" checked title="Devolver à biblioteca">
+      ${link}
+      <span class="lib-card-stats">
+        <span class="lib-card-hours">${hoursEl}</span>
+        ${foot}
+      </span>
+    </article>`;
+  }
   return `<article class="lib-card" data-app-id="${esc(game.appId)}" draggable="true">
-    <input type="checkbox" data-skip="${esc(game.appId)}" ${skipped ? "checked" : ""} title="${skipped ? "Devolver à biblioteca" : "Não vou jogar"}">
+    <input type="checkbox" data-skip="${esc(game.appId)}" title="Não vou jogar">
     <span class="lib-move" title="Arrastar para outra lista" aria-hidden="true">⋮⋮</span>
-    <a class="lib-link" href="${esc(game.storeUrl || "#")}" draggable="false">${img}<span class="lib-name">${esc(game.name || "")}</span></a>
+    ${link}
     ${hoursEl}${reviews}${family}${unpin}
   </article>`;
 }
@@ -482,13 +497,41 @@ function paintLibrary() {
   }
 }
 
+function readBacklogSort() {
+  try {
+    const raw = localStorage.getItem(BACKLOG_SORT_KEY);
+    if (BACKLOG_SORTS.includes(raw)) return raw;
+  } catch {
+    // quota
+  }
+  return "hours";
+}
+
+function applyBacklogSort(sort, persist) {
+  const next = BACKLOG_SORTS.includes(sort) ? sort : "hours";
+  const changed = next !== backlogSort;
+  backlogSort = next;
+  const sel = $("backlogSort");
+  if (sel && sel.value !== backlogSort) sel.value = backlogSort;
+  try {
+    localStorage.setItem(BACKLOG_SORT_KEY, backlogSort);
+  } catch {
+    // quota
+  }
+  if (persist && changed && window.steamApp && typeof window.steamApp.saveSettings === "function") {
+    window.steamApp.saveSettings({ backlogSort }).catch(() => {});
+  }
+}
+
 function paintSkipped() {
   const query = normalizeQuery($("backlogSearch")?.value);
-  const list = skippedGames.filter((game) => nameMatches(game.name, query));
+  const filtered = skippedGames.filter((game) => nameMatches(game.name, query));
+  const list = window.libraryBoard?.sortItems ? window.libraryBoard.sortItems(filtered, backlogSort) : filtered;
+  const sortLabel = backlogSort === "reviews" ? "reviews % positivas" : backlogSort === "name" ? "nome" : "horas";
   $("backlogHint").textContent = query
     ? `${list.length} resultado(s) em Não vou jogar`
-    : `${list.length} jogos · desmarque para devolver à biblioteca`;
-  const meta = `<div class="lib-meta">Esta lista não apaga o jogo da Steam. Desmarque para devolver à aba <b>Jogos</b>.</div>`;
+    : `${list.length} jogos · ordem: ${sortLabel} · desmarque para devolver à biblioteca`;
+  const meta = `<div class="lib-meta">Esta lista não apaga o jogo da Steam. Desmarque para devolver à aba <b>Jogos</b>. A ordem (Horas, Reviews % positivas, Nome) vale para a lista inteira.</div>`;
   const cards = list.map((game) => libCard(game, true)).join("");
   $("backlogSkipped").innerHTML =
     meta +
@@ -644,6 +687,8 @@ function render(state) {
   }
   if (window.layoutBoard && state.layout) window.layoutBoard.mergeFromServer(state.layout);
   if (window.libraryBoard && state.libraryLists) window.libraryBoard.mergeFromServer(state.libraryLists);
+  if (BACKLOG_SORTS.includes(state.backlogSort)) applyBacklogSort(state.backlogSort, false);
+  else applyBacklogSort(readBacklogSort(), false);
   $("novidades").innerHTML =
     state.novidadesHtml ||
     `<div class="gwd-updates gwd-updates-quiet">Nenhuma atualização na wishlist nos últimos 7 dias.</div>`;
@@ -785,6 +830,12 @@ if ($("btnDownloadApk")) {
 $("search").oninput = () => paintGames();
 $("jogosSearch").oninput = () => paintLibrary();
 $("backlogSearch").oninput = () => paintSkipped();
+if ($("backlogSort")) {
+  $("backlogSort").onchange = () => {
+    applyBacklogSort($("backlogSort").value, true);
+    paintSkipped();
+  };
+}
 
 async function onSkipToggle(event) {
   const input = event.target.closest("input[data-skip]");

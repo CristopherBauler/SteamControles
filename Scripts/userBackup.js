@@ -85,6 +85,7 @@ async function mirrorUserData(config) {
     layout: config.layout && typeof config.layout === "object" ? config.layout : {},
     libraryLists:
       config.libraryLists && typeof config.libraryLists === "object" ? config.libraryLists : { lists: [], pins: {} },
+    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
     hasApiKey: Boolean(config.steamWebApiKey),
   });
 }
@@ -107,6 +108,7 @@ async function buildExportPayload(config) {
     layout: config.layout && typeof config.layout === "object" ? config.layout : {},
     libraryLists:
       config.libraryLists && typeof config.libraryLists === "object" ? config.libraryLists : { lists: [], pins: {} },
+    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
     steamWebApiKey: config.steamWebApiKey || "",
     backlogDone: done,
     backlogTracked: tracked,

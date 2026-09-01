@@ -42,6 +42,7 @@ const DEFAULT_CONFIG = {
   theme: { ...DEFAULT_THEME, tabs: { ...DEFAULT_THEME.tabs } },
   layout: {},
   libraryLists: { lists: [], pins: {} },
+  backlogSort: "hours",
 };
 
 function normalizeHex(value, fallback) {
@@ -118,6 +119,7 @@ async function loadConfig() {
       config.libraryLists && typeof config.libraryLists === "object" && !Array.isArray(config.libraryLists)
         ? config.libraryLists
         : { lists: [], pins: {} },
+    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
     paths: {
       root: base,
       config: CONFIG_PATH,

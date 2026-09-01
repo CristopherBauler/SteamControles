@@ -596,6 +596,7 @@
     mergeFromServer,
     group,
     isPinned,
+    sortItems,
     ensureTools,
     bind,
     defaults: DEFAULT_LISTS,

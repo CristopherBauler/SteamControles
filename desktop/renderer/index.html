@@ -98,7 +98,14 @@
 
     <div id="tab-backlog" class="tab-panel hidden" role="tabpanel">
       <div class="lib-head">
-        <h2>Não vou jogar</h2>
+        <div class="lib-head-row">
+          <h2>Não vou jogar</h2>
+          <select id="backlogSort" class="lib-sort" title="Ordenar todos os jogos desta lista" aria-label="Ordenar Não vou jogar">
+            <option value="hours">Horas</option>
+            <option value="reviews">Reviews</option>
+            <option value="name">Nome</option>
+          </select>
+        </div>
         <p class="filter-hint" id="backlogHint"></p>
       </div>
       <input id="backlogSearch" class="page-search" type="search" placeholder="Buscar nesta lista" autocomplete="off" spellcheck="false">
