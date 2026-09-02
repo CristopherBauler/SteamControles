@@ -359,16 +359,21 @@ function libCoverList(game) {
 }
 
 function dealCoverError(img) {
-  const next = String(img.getAttribute("data-fallback") || "").trim();
-  if (next && img.getAttribute("src") !== next) {
+  const next = String(img.dataset.covers || img.getAttribute("data-fallback") || "")
+    .split("|")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  if (next.length && img.getAttribute("src") !== next[0]) {
+    img.dataset.covers = next.slice(1).join("|");
     img.removeAttribute("data-fallback");
-    img.src = next;
+    img.src = next[0];
     return;
   }
   const ph = document.createElement("div");
   ph.className = "gwd-deal-ph";
   img.replaceWith(ph);
 }
+window.dealCoverError = dealCoverError;
 
 function libCoverError(img) {
   const next = String(img.dataset.covers || "")
@@ -698,10 +703,21 @@ function render(state) {
   libraryGames = state.libraryGames || [];
   skippedGames = state.skippedGames || [];
   libraryMeta = state.libraryMeta || {};
+  paintTabCounts();
   paintGames();
   paintLibrary();
   paintSkipped();
   paintBoards();
+}
+
+function paintTabCounts() {
+  const set = (id, count) => {
+    const el = $(id);
+    if (el) el.textContent = String(Number(count) || 0);
+  };
+  set("tabCountWishlist", wishGames.length);
+  set("tabCountJogos", libraryGames.length);
+  set("tabCountBacklog", skippedGames.length);
 }
 
 function paintBoards() {

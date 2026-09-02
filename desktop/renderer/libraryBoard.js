@@ -64,7 +64,22 @@
         if (Number(id) > 0 && listId) pins[String(Number(id))] = String(listId);
       }
     }
-    return { lists, pins };
+    const updatedAt = typeof src.updatedAt === "string" ? src.updatedAt : "";
+    return { lists, pins, updatedAt };
+  }
+
+  function isStockLists(lists) {
+    if (!Array.isArray(lists) || lists.length !== DEFAULT_LISTS.length) return false;
+    return lists.every((list, i) => {
+      const def = DEFAULT_LISTS[i];
+      return list.id === def.id && list.auto === def.auto && list.title === def.title;
+    });
+  }
+
+  function richness(payload) {
+    const nLists = Array.isArray(payload?.lists) ? payload.lists.length : 0;
+    const nPins = payload?.pins && typeof payload.pins === "object" ? Object.keys(payload.pins).length : 0;
+    return nLists * 10 + nPins;
   }
 
   function cleanList(item) {
@@ -84,6 +99,7 @@
   }
 
   function persist() {
+    data.updatedAt = new Date().toISOString();
     try {
       localStorage.setItem(STORAGE, JSON.stringify(data));
     } catch {
@@ -100,13 +116,22 @@
 
   function mergeFromServer(incoming) {
     if (!incoming || typeof incoming !== "object") return;
-    const localEmpty =
-      !Object.keys(data.pins || {}).length &&
-      JSON.stringify(data.lists) === JSON.stringify(DEFAULT_LISTS);
+    const remote = sanitize(incoming);
     const has =
-      (Array.isArray(incoming.lists) && incoming.lists.length) ||
-      (incoming.pins && Object.keys(incoming.pins).length);
-    if (localEmpty && has) data = sanitize(incoming);
+      (Array.isArray(remote.lists) && remote.lists.length) ||
+      (remote.pins && Object.keys(remote.pins).length);
+    if (!has) return;
+    const localStock = isStockLists(data.lists) && !Object.keys(data.pins || {}).length;
+    const remoteAt = Date.parse(incoming.updatedAt || remote.updatedAt || 0) || 0;
+    const localAt = Date.parse(data.updatedAt || 0) || 0;
+    const takeRemote = localStock || (remoteAt > localAt && richness(remote) >= richness(data));
+    if (!takeRemote) return;
+    data = remote;
+    try {
+      localStorage.setItem(STORAGE, JSON.stringify(data));
+    } catch {
+      // quota
+    }
   }
 
   function autoId(hours) {
@@ -146,11 +171,46 @@
     return list;
   }
 
-  function group(games) {
-    if (leftoverWouldExist(games) && !data.lists.some((list) => list.id === "outros")) {
-      data.lists.push({ id: "outros", title: "Outros", extra: "sem faixa automática", tone: "red", auto: null, sort: "hours" });
-      persist();
+  function ensureHomeLists(games) {
+    const haveAuto = new Set(data.lists.map((list) => list.auto).filter(Boolean));
+    const needed = new Set();
+    for (const game of games || []) {
+      const pin = data.pins[String(game.appId)];
+      if (pin && data.lists.some((list) => list.id === pin)) continue;
+      needed.add(autoId(hoursOf(game)));
     }
+    let changed = false;
+    DEFAULT_LISTS.forEach((def, idx) => {
+      if (!needed.has(def.auto) || haveAuto.has(def.auto)) return;
+      let insertAt = data.lists.length;
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        const prev = DEFAULT_LISTS[i];
+        const at = data.lists.findIndex((list) => list.id === prev.id || list.auto === prev.auto);
+        if (at >= 0) {
+          insertAt = at + 1;
+          break;
+        }
+      }
+      data.lists.splice(insertAt, 0, { ...def, sort: "hours" });
+      haveAuto.add(def.auto);
+      changed = true;
+    });
+    if (leftoverWouldExist(games) && !data.lists.some((list) => list.id === "outros")) {
+      data.lists.push({
+        id: "outros",
+        title: "Outros",
+        extra: "sem faixa automática",
+        tone: "red",
+        auto: null,
+        sort: "hours",
+      });
+      changed = true;
+    }
+    if (changed) persist();
+  }
+
+  function group(games) {
+    ensureHomeLists(games);
     const lists = clone(data.lists.length ? data.lists : DEFAULT_LISTS);
     const buckets = Object.fromEntries(lists.map((list) => [list.id, []]));
     for (const game of games || []) {
@@ -162,7 +222,6 @@
       const home = lists.find((list) => list.auto && list.auto === autoId(hoursOf(game)));
       if (home && buckets[home.id]) buckets[home.id].push(game);
       else if (buckets.outros) buckets.outros.push(game);
-      else if (lists[0]) buckets[lists[0].id].push(game);
     }
     return lists
       .map((list) => {

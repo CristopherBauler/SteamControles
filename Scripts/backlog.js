@@ -724,7 +724,7 @@ async function saveDoneState(paths, doneGames) {
   });
   try {
     const { mirrorBacklogFiles } = require("./userBackup");
-    await mirrorBacklogFiles(paths);
+    await mirrorBacklogFiles(paths, { allowEmpty: true });
   } catch {
     // espelho no AppData não pode quebrar a marcação
   }

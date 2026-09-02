@@ -20,7 +20,7 @@ const {
 } = require("./config");
 const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedPlaytimes, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError, isForbiddenError, capsuleUrl, detectEarlyAccess } = require("./steamApi");
 const { refreshBacklog } = require("./backlog");
-const { fetchGgDealsPopular, fetchGgDealsDeals, resolveDealLists } = require("./ggDeals");
+const { fetchGgDealsPopular, fetchGgDealsDeals, resolveDealLists, enrichDeals } = require("./ggDeals");
 const { collectWishlistUpdates } = require("./wishlistUpdates");
 const { loadHistory, saveHistory, migrateLegacyIfNeeded, appendDaily, summarize, colorStatus, ensureBasePrice } = require("./historyManager");
 const { fetchItadPrices } = require("./stores");
@@ -143,7 +143,7 @@ async function writeGgDealsCache(paths, storeHub, stamp) {
   await writeJson(paths.ggDeals, {
     updatedAt: stamp,
     source: "gg.deals",
-    scraped: Boolean(storeHub.ggDealsScraped),
+    scraped: storeHub.ggDealsSkipped ? Boolean(previous.scraped) : Boolean(storeHub.ggDealsScraped),
     newDeals: lists.newDeals,
     bestDeals: lists.bestDeals,
   });
@@ -239,7 +239,7 @@ function createSyncProgress(onProgress) {
   };
 }
 
-async function refreshStoreSurfaces({ config, ownedIds, wishlistItems = [], onTick } = {}) {
+async function refreshStoreSurfaces({ config, ownedIds, wishlistItems = [], onTick, scrapeGgDeals = false } = {}) {
   const { paths } = config;
   const owned = ownedIds instanceof Set ? ownedIds : new Set();
   let mostWanted = [];
@@ -297,80 +297,103 @@ async function refreshStoreSurfaces({ config, ownedIds, wishlistItems = [], onTi
   }
   if (onTick) onTick(2);
 
-  try {
-    const previousGg = await readJson(paths.ggPopular, { games: [] });
-    const gg = await fetchGgDealsPopular({
-      country: config.country,
-      language: config.language,
-      ownedIds: owned,
-      previous: previousGg.games || [],
-    });
-    ggPopular = gg.games;
-    ggScraped = Boolean(gg.scraped);
-    console.log(
-      paint(
-        "cyan",
-        `gg.deals Most Popular: ${ggPopular.slice(0, 6).map((g) => g.name).join(", ")}…${gg.scraped ? "" : " (ranking em cache)"}`
-      )
-    );
-  } catch (error) {
-    const previousGg = await readJson(paths.ggPopular, { games: [] });
-    ggPopular = previousGg.games || [];
-    console.log(paint("yellow", `gg.deals Most Popular indisponível: ${error.message}`));
-  }
-  if (onTick) onTick(3);
+  const previousGg = await readJson(paths.ggPopular, { games: [] });
+  const previousDeals = await readJson(paths.ggDeals, { newDeals: [], bestDeals: [] });
 
-  try {
-    const previousDeals = await readJson(paths.ggDeals, { newDeals: [], bestDeals: [] });
-    const deals = await fetchGgDealsDeals({
+  if (!scrapeGgDeals) {
+    ggPopular = previousGg.games || [];
+    const lists = resolveDealLists({}, previousDeals);
+    const enrichOpts = {
       country: config.country,
       language: config.language,
       ownedIds: owned,
-      previous: previousDeals,
       knownGames: [...ggPopular, ...mostWanted],
-    });
-    const lists = resolveDealLists(deals, previousDeals);
+    };
     storeHub = {
       ...storeHub,
-      newDeals: lists.newDeals,
-      bestDeals: lists.bestDeals,
-      ggDealsUsd: deals.usdOnly,
-      ggDealsScraped: deals.scraped,
+      newDeals: await enrichDeals(lists.newDeals, { ...enrichOpts, previous: lists.newDeals }),
+      bestDeals: await enrichDeals(lists.bestDeals, { ...enrichOpts, previous: lists.bestDeals }),
+      ggDealsUsd: Boolean(previousDeals.usdOnly),
+      ggDealsScraped: Boolean(previousDeals.scraped),
+      ggDealsSkipped: true,
     };
-    ggScraped = ggScraped || Boolean(deals.scraped);
-    const preview = (list) => (list || []).slice(0, 5).map((g) => g.name).join(", ");
-    if (deals.scraped) {
-      console.log(
-        paint("cyan", `gg.deals New deals: ${preview(deals.newDeals)}… · Best deals: ${preview(deals.bestDeals)}…`)
-      );
-    } else {
+    ggScraped = false;
+    if (onTick) onTick(3);
+    if (onTick) onTick(4);
+  } else {
+    try {
+      const gg = await fetchGgDealsPopular({
+        country: config.country,
+        language: config.language,
+        ownedIds: owned,
+        previous: previousGg.games || [],
+      });
+      ggPopular = gg.games;
+      ggScraped = Boolean(gg.scraped);
       console.log(
         paint(
-          "yellow",
-          `gg.deals New/Best deals: scrape bloqueado — usando cache (${lists.newDeals.length} + ${lists.bestDeals.length} jogos)`
+          "cyan",
+          `gg.deals Most Popular: ${ggPopular.slice(0, 6).map((g) => g.name).join(", ")}…${gg.scraped ? "" : " (ranking em cache)"}`
         )
       );
+    } catch (error) {
+      ggPopular = previousGg.games || [];
+      console.log(paint("yellow", `gg.deals Most Popular indisponível: ${error.message}`));
     }
-  } catch (error) {
-    const previousDeals = await readJson(paths.ggDeals, { newDeals: [], bestDeals: [] });
-    const lists = resolveDealLists({}, previousDeals);
-    storeHub = {
-      ...storeHub,
-      newDeals: lists.newDeals,
-      bestDeals: lists.bestDeals,
-      ggDealsUsd: false,
-      ggDealsScraped: false,
-    };
-    console.log(paint("yellow", `gg.deals New/Best deals indisponível: ${error.message}`));
+    if (onTick) onTick(3);
+
+    try {
+      const deals = await fetchGgDealsDeals({
+        country: config.country,
+        language: config.language,
+        ownedIds: owned,
+        previous: previousDeals,
+        knownGames: [...ggPopular, ...mostWanted],
+      });
+      const lists = resolveDealLists(deals, previousDeals);
+      storeHub = {
+        ...storeHub,
+        newDeals: lists.newDeals,
+        bestDeals: lists.bestDeals,
+        ggDealsUsd: deals.usdOnly,
+        ggDealsScraped: deals.scraped,
+        ggDealsSkipped: false,
+      };
+      ggScraped = ggScraped || Boolean(deals.scraped);
+      const preview = (list) => (list || []).slice(0, 5).map((g) => g.name).join(", ");
+      if (deals.scraped) {
+        console.log(
+          paint("cyan", `gg.deals New deals: ${preview(deals.newDeals)}… · Best deals: ${preview(deals.bestDeals)}…`)
+        );
+      } else {
+        console.log(
+          paint(
+            "yellow",
+            `gg.deals New/Best deals: scrape bloqueado — usando cache (${lists.newDeals.length} + ${lists.bestDeals.length} jogos)`
+          )
+        );
+      }
+    } catch (error) {
+      const lists = resolveDealLists({}, previousDeals);
+      storeHub = {
+        ...storeHub,
+        newDeals: lists.newDeals,
+        bestDeals: lists.bestDeals,
+        ggDealsUsd: false,
+        ggDealsScraped: false,
+        ggDealsSkipped: false,
+      };
+      console.log(paint("yellow", `gg.deals New/Best deals indisponível: ${error.message}`));
+    }
+    if (onTick) onTick(4);
   }
-  if (onTick) onTick(4);
 
   const stamp = nowIso();
   await writeJson(paths.mostWanted, { updatedAt: stamp, games: mostWanted });
   await writeJson(paths.ggPopular, {
     updatedAt: stamp,
     source: "gg.deals",
-    scraped: ggScraped,
+    scraped: storeHub.ggDealsSkipped ? Boolean(previousGg.scraped) : ggScraped,
     games: ggPopular,
   });
   const ggLists = await writeGgDealsCache(paths, storeHub, stamp);
@@ -394,6 +417,7 @@ async function runStoreOnly(options = {}) {
     ownedIds: new Set((ownedFile.appIds || []).map(Number)),
     wishlistItems: wish.games || [],
     onTick: (n) => progress.tick("loja", n, 4, "loja"),
+    scrapeGgDeals: options.scrapeGgDeals !== false,
   });
   progress.done("loja", "loja");
   return {
@@ -483,6 +507,7 @@ async function main(options = {}) {
     ownedIds,
     wishlistItems,
     onTick: (n) => progress.tick("loja", n, 4),
+    scrapeGgDeals: options.scrapeGgDeals !== false,
   });
   mostWanted = store.mostWanted;
   ggPopular = store.ggPopular;

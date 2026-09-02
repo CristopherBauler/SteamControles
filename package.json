@@ -28,6 +28,11 @@
     "appId": "dev.steamcontroles.app",
     "productName": "Minha Loja dos Desejos",
     "asar": true,
+    "asarUnpack": [
+      "desktop/icon.png",
+      "desktop/icon.ico",
+      "desktop/icon-default.png"
+    ],
     "files": [
       "desktop/**/*",
       "Scripts/**/*",

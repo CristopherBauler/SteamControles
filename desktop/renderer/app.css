@@ -275,6 +275,7 @@ input, select {
   font-weight: 700;
   font-size: 13px;
   opacity: 0.72;
+  white-space: nowrap;
 }
 .tab:hover {
   opacity: 1;
@@ -287,6 +288,13 @@ input, select {
   color: var(--tab);
   box-shadow: inset 0 -2px 0 var(--tab);
 }
+.tab-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  margin-left: 2px;
+  opacity: 0.88;
+}
+.tab-count:empty { display: none; }
 .tab[data-tab="novidades"] { --tab: var(--tab-novidades); }
 .tab[data-tab="wishlist"] { --tab: var(--tab-wishlist); }
 .tab[data-tab="loja"] { --tab: var(--tab-loja); }

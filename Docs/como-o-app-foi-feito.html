@@ -114,7 +114,8 @@
   <ol class="steps">
     <li>Fonte da verdade das marcações: <code>Data/backlogDone.json</code> (appIds + snapshot do jogo).</li>
     <li>Espelho automático em <code>%AppData%\Roaming\MinhaLojaDosDesejos\</code>. Desinstalar o atalho não apaga isso.</li>
-    <li>Ajustes → <b>Exportar cópia</b> / <b>Restaurar cópia</b>: JSON único para formatar o Windows ou trocar de PC.</li>
+    <li>O exe portable grava em <code>%AppData%\Roaming\Minha Loja dos Desejos\</code> (com espaços). O <code>npm run app</code> grava no <code>Data/</code> do vault. São duas casas. Na abertura o app <b>hidrata</b> a casa vazia a partir da mais cheia (espelho ou o <code>source.json</code> apontando para o vault) e <b>nunca copia uma lista vazia por cima de uma cheia</b>.</li>
+    <li>Ajustes → <b>Exportar cópia</b> / <b>Restaurar cópia</b>: JSON único para formatar o Windows ou trocar de PC. Restaurar também devolve cores, layout e listas da aba Jogos.</li>
     <li>O usuário não precisa abrir pasta nem editar JSON. Caminhos crus saíram da UI de propósito.</li>
   </ol>
   <p>
@@ -124,9 +125,10 @@
 
   <h2>6. Timers de sync (PC)</h2>
   <ul>
-    <li><b>Loja</b> (Steam hub + gg.deals): sozinha a cada <b>30 minutos</b>. Não espera o intervalo da wishlist.</li>
+    <li><b>Loja Steam</b> (hub / mais desejados): junto com o sync da wishlist (6 / 12 / 24 h) e no <b>Atualizar agora</b>. Sem timer de 30 min.</li>
+    <li><b>gg.deals</b> (Chromium + Cloudflare): <b>só</b> no <b>Atualizar agora</b>. O sync automático não abre o site, para não tomar bloqueio. Se o scrape falhar, a UI mostra o último ranking e pede para tentar de novo no botão.</li>
     <li>Wishlist + Novidades + Jogos/backlog: o que o usuário escolhe em Ajustes (6 / 12 / 24 h). No PC isso é o timer da bandeja. No celular vale ao reabrir o app ou tocar Atualizar. Os dois intervalos são independentes.</li>
-    <li><b>Atualizar agora</b>: sync completo (se estiver logado). Inclui Loja.</li>
+    <li><b>Atualizar agora</b>: sync completo (se estiver logado). Inclui Loja Steam e o scrape do gg.deals.</li>
     <li>Bug antigo: o scrape do gg.deals era cacheado para sempre no processo Electron. Um “atualizar” não relia o site. Isso foi removido.</li>
   </ul>
 
@@ -156,6 +158,8 @@ mobile/                     Capacitor (fase seguinte ao PC)</pre>
 
   <h2>9. Histórico deste documento</h2>
   <ul>
+    <li>2026-09-02 — gg.deals só no Atualizar agora; capas das ofertas pela CDN da Steam (sem timer de 30 min).</li>
+    <li>2026-09-01 — hydrate: exe e vault não se apagam; cópia vazia não sobrescreve backlog/cores/listas; listas de Jogos recriam faixas de horas que ainda têm jogos.</li>
     <li>2026-09-01 — celular: primeiro espelho do PC, depois sync Steam independente; marcas LAN; intervalo próprio ao reabrir.</li>
     <li>2026-09-01 — primeira versão: origem Obsidian→Electron→Capacitor, persistência AppData, Loja 30 min, scrape Chromium, nuvem para terceiros.</li>
   </ul>

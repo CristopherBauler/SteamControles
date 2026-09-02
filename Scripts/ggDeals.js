@@ -391,6 +391,10 @@ function parseStore(text) {
   return "Steam";
 }
 
+function isSteamStore(store) {
+  return !store || /\bsteam\b/i.test(String(store));
+}
+
 function parseRelativeTime(text) {
   const m = String(text || "").match(
     /(\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?|mins?|hrs?|secs?)\s+ago|\d+\s*[smhd]\s*ago|just now|yesterday|há\s+\d+\s+[^\n<,]+)/i
@@ -449,7 +453,11 @@ function dealFromParts(name, body, extra = {}) {
   const price = parseDealPrice(blob);
   const slug = extra.slug || blob.match(/gg\.deals\/game\/([^/"'\s]+)/i)?.[1] || slugify(name);
   const appIdRaw = Number(
-    extra.appId || blob.match(/steam\/app\/(\d+)/i)?.[1] || blob.match(/data-(?:steam-)?app-id="(\d+)"/i)?.[1]
+    extra.appId ||
+      blob.match(/steam\/app\/(\d+)/i)?.[1] ||
+      blob.match(/steam\/apps\/(\d+)/i)?.[1] ||
+      String(extra.image || "").match(/steam\/apps\/(\d+)/i)?.[1] ||
+      blob.match(/data-(?:steam-)?app-id="(\d+)"/i)?.[1]
   );
   const appId = Number.isInteger(appIdRaw) && appIdRaw > 0 ? appIdRaw : null;
   const image = extra.image || "";
@@ -509,6 +517,8 @@ function parseDealsFromHtml(chunk) {
     );
     if (!isDealName(name)) continue;
     const img =
+      window.match(/src="(https:\/\/shared\.[^"]+steam\/apps\/\d+[^"]+)"/i)?.[1] ||
+      window.match(/src="(https:\/\/cdn\.[^"]+steam\/apps\/\d+[^"]+)"/i)?.[1] ||
       window.match(/src="(https:\/\/img\.gg\.deals\/[^"]+)"/i)?.[1] ||
       window.match(/src="(https:\/\/[^"]+game[^"]+\.(?:jpg|png|webp)[^"]*)"/i)?.[1] ||
       "";
@@ -911,7 +921,8 @@ function isGgDealsCdn(url) {
 
 function dealSteamCover(appId) {
   const id = Number(appId);
-  return Number.isInteger(id) && id > 0 ? capsuleUrl(id) : "";
+  if (!Number.isInteger(id) || id <= 0) return "";
+  return `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`;
 }
 
 function searchAliases(name) {
@@ -1098,6 +1109,7 @@ module.exports = {
   fetchGgDealsPopular,
   fetchGgDealsDeals,
   resolveDealLists,
+  enrichDeals,
   setHtmlFetcher,
   beginGgScrapeSession,
   SEED_DEALS,

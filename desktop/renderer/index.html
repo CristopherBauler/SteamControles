@@ -45,10 +45,10 @@
   <section id="dash" class="hidden">
     <nav class="tabs" role="tablist" aria-label="Seções">
       <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="novidades">Novidades</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="wishlist">Wishlist</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="wishlist">Wishlist <span class="tab-count" id="tabCountWishlist"></span></button>
       <button type="button" class="tab" role="tab" aria-selected="false" data-tab="loja">Loja</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="jogos">Jogos</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="backlog">Backlog</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="jogos">Jogos <span class="tab-count" id="tabCountJogos"></span></button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="backlog">Backlog <span class="tab-count" id="tabCountBacklog"></span></button>
     </nav>
 
     <div id="tab-novidades" class="tab-panel game-wishlist-dashboard" role="tabpanel">
@@ -159,7 +159,7 @@
         </select>
       </label>
       <p class="hint">Nas abas Novidades, Loja e Jogos arraste o título da seção (como a barra de um navegador) e puxe o canto para o tamanho. Wishlist e Não vou jogar ficam iguais. Cada aba tem o botão Layout padrão.</p>
-      <p class="hint pc-only">No PC a Loja (Steam + gg.deals) atualiza sozinha a cada 30 minutos, sem esperar esse intervalo.</p>
+      <p class="hint pc-only">No PC o gg.deals só é lido quando você clica em <b>Atualizar agora</b>. O intervalo abaixo vale para wishlist, novidades e biblioteca — não abre o site sozinho.</p>
       <p class="hint mobile-only">Neste celular o intervalo é o atraso mínimo ao reabrir o app. A Loja também só muda no Atualizar / ao reabrir.</p>
       <label class="check pc-only"><input type="checkbox" id="notifySales" checked> Avisar promoções</label>
       <label class="check pc-only"><input type="checkbox" id="notifyNews" checked> Avisar notícias</label>

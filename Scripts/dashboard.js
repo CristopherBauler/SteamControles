@@ -51,20 +51,42 @@ function cover(game) {
   return "";
 }
 
-function dealThumb(game) {
-  const img = cover(game);
+function dealCoverUrls(game) {
+  const urls = [];
+  const seen = new Set();
+  const push = (value) => {
+    const url = String(value || "").trim();
+    if (!url || seen.has(url) || /img\.gg\.deals/i.test(url)) return;
+    seen.add(url);
+    urls.push(url);
+  };
   const id = Number(game?.appId);
-  const fallback =
-    Number.isInteger(id) && id > 0
-      ? `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`
-      : "";
-  if (!img && !fallback) return `<div class="gwd-deal-ph"></div>`;
-  const src = img || fallback;
-  const next = src === fallback ? "" : fallback;
-  const err = next
-    ? ` data-fallback="${esc(next)}" onerror="dealCoverError(this)"`
-    : ` onerror="dealCoverError(this)"`;
-  return `<img src="${esc(src)}" alt="" referrerpolicy="no-referrer"${err}>`;
+  push(game?.headerImage);
+  push(game?.image);
+  if (Number.isInteger(id) && id > 0) {
+    push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`);
+    push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/capsule_231x87.jpg`);
+    push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`);
+    push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`);
+  }
+  const gg = String(game?.headerImage || game?.image || "").trim();
+  if (!urls.length && gg) urls.push(gg);
+  return urls;
+}
+
+function dealThumb(game) {
+  const urls = dealCoverUrls(game);
+  if (!urls.length) return `<div class="gwd-deal-ph"></div>`;
+  const rest = urls.slice(1).join("|");
+  return `<img src="${esc(urls[0])}" alt="" referrerpolicy="no-referrer" loading="lazy" data-covers="${esc(rest)}" onerror="dealCoverError(this)">`;
+}
+
+function ggDealsStaleNote(storeHub, ggDeals) {
+  if (storeHub?.ggDealsSkipped) return "";
+  if (ggDeals?.scraped === false || storeHub?.ggDealsScraped === false) {
+    return `<div class="gwd-empty">gg.deals bloqueou a leitura agora — mostrando o último ranking que entrou. Tente de novo em <b>Atualizar agora</b>.</div>`;
+  }
+  return "";
 }
 
 function check(owned) {
@@ -396,10 +418,7 @@ function storePageHtml({
   const usdNote = storeHub.ggDealsUsd
     ? `<div class="gwd-empty">Preços como no gg.deals (muitos em USD). A ordem das listas é a do site.</div>`
     : "";
-  const stale =
-    ggDeals.scraped === false || storeHub.ggDealsScraped === false
-      ? `<div class="gwd-empty">gg.deals bloqueou a leitura agora — mostrando o último ranking que entrou. A Loja tenta de novo sozinha a cada 30 min.</div>`
-      : "";
+  const stale = ggDealsStaleNote(storeHub, ggDeals);
   return `<div class="gwd-store" data-board="loja">
     <div class="board-tile" data-board-tile="wanted">
       ${sectionHead("Mais desejados na Steam", "ranking público da loja · inclui os que você já tem")}

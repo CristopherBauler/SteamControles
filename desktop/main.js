@@ -40,18 +40,15 @@ const APP_VERSION = require("../package.json").version;
 const APK_RELEASES_URL = "https://github.com/CristopherBauler/SteamControles/releases";
 
 const HOUR_MS = 60 * 60 * 1000;
-const STORE_MS = 30 * 60 * 1000;
 let mainWindow = null;
 let tray = null;
 let syncing = false;
 let syncProgress = null;
 let lastProgressSentAt = 0;
 let syncTimer = null;
-let storeTimer = null;
 let lastSyncAt = null;
 let lastStoreAt = null;
 let nextSyncAt = null;
-let nextStoreAt = null;
 let libraryReviewJob = null;
 
 function kickLibraryReviews(config, library) {
@@ -72,10 +69,17 @@ function kickLibraryReviews(config, library) {
 }
 
 function iconFiles() {
+  const asarDir = __dirname;
+  const unpackedDir = asarDir.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+  const pick = (name) => {
+    const unpacked = path.join(unpackedDir, name);
+    if (unpacked !== path.join(asarDir, name) && fs.existsSync(unpacked)) return unpacked;
+    return path.join(asarDir, name);
+  };
   return {
-    png: path.join(__dirname, "icon.png"),
-    ico: path.join(__dirname, "icon.ico"),
-    fallback: path.join(__dirname, "icon-default.png"),
+    png: pick("icon.png"),
+    ico: pick("icon.ico"),
+    fallback: pick("icon-default.png"),
   };
 }
 
@@ -184,22 +188,69 @@ function writeIconFiles(image) {
   fs.writeFileSync(files.ico, imageToIco(image));
 }
 
+function isExePath(filePath) {
+  return /\.(exe|dll)$/i.test(String(filePath || ""));
+}
+
+let diskIconPath = "";
+
+function materializeIconFile() {
+  const destDir = path.join(app.getPath("userData"), "icons");
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+  } catch {
+    return "";
+  }
+  const files = iconFiles();
+  for (const file of [files.ico, files.png, files.fallback]) {
+    if (!file || !fs.existsSync(file) || isExePath(file)) continue;
+    const dest = path.join(destDir, path.basename(file));
+    try {
+      fs.copyFileSync(file, dest);
+      if (fs.existsSync(dest) && !isExePath(dest)) return dest;
+    } catch {
+      // tenta o próximo formato
+    }
+  }
+  return "";
+}
+
+function rasterIcon(image) {
+  try {
+    if (!image || (typeof image.isEmpty === "function" && image.isEmpty())) return iconImage();
+    const next = nativeImage.createFromBuffer(image.toPNG());
+    if (!next.isEmpty()) return next;
+  } catch {
+    // cai no original
+  }
+  return image;
+}
+
 function windowIcon() {
-  const ico = shortcutIconPath();
-  if (ico) return ico;
-  return iconImage();
+  return rasterIcon(iconImage());
+}
+
+function applyNativeIcon(target, method, image) {
+  if (!target || target.isDestroyed?.()) return;
+  const next = rasterIcon(image && typeof image.isEmpty === "function" && !image.isEmpty() ? image : iconImage());
+  try {
+    target[method](next);
+  } catch (error) {
+    console.error(method, error);
+  }
 }
 
 function applyLiveIcon(image) {
-  const next = shortcutIconPath() || image;
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setIcon(next);
-  if (tray && !tray.isDestroyed()) tray.setImage(next);
+  const next = image && typeof image.isEmpty === "function" && !image.isEmpty() ? image : iconImage();
+  applyNativeIcon(mainWindow, "setIcon", next);
+  applyNativeIcon(tray, "setImage", next);
 }
 
 function iconImage() {
   const files = iconFiles();
-  for (const file of [files.ico, files.png, files.fallback]) {
-    if (!fs.existsSync(file)) continue;
+  const candidates = [diskIconPath, files.png, files.ico, files.fallback];
+  for (const file of candidates) {
+    if (!file || !fs.existsSync(file) || isExePath(file)) continue;
     try {
       const image = nativeImage.createFromPath(file);
       if (!image.isEmpty()) return image;
@@ -329,10 +380,7 @@ async function createAppShortcuts() {
 }
 
 function bindWindowIcon(win) {
-  const apply = () => {
-    if (!win || win.isDestroyed()) return;
-    win.setIcon(windowIcon());
-  };
+  const apply = () => applyNativeIcon(win, "setIcon", windowIcon());
   win.webContents.on("did-finish-load", apply);
   win.once("ready-to-show", apply);
 }
@@ -378,15 +426,18 @@ function createWindow() {
         ? `"${spec.target}" ${spec.args}`
         : `"${spec.target}"`
       : "";
-    const ico = shortcutIconPath();
-    if (relaunch && ico) {
-      mainWindow.setAppDetails({
+    const ico = notificationIconPath();
+    if (relaunch) {
+      const details = {
         appId: APP_AUMID,
-        appIconPath: ico,
-        appIconIndex: 0,
         relaunchCommand: relaunch,
         relaunchDisplayName: APP_TITLE,
-      });
+      };
+      if (ico && !isExePath(ico) && !String(ico).includes(".asar")) {
+        details.appIconPath = ico;
+        details.appIconIndex = 0;
+      }
+      mainWindow.setAppDetails(details);
     }
   } catch {
     // setAppDetails is Windows-only
@@ -409,7 +460,17 @@ function showWindow() {
 }
 
 function createTray() {
-  tray = new Tray(windowIcon());
+  try {
+    tray = new Tray(rasterIcon(iconImage()));
+  } catch (error) {
+    console.error("Tray", error);
+    try {
+      tray = new Tray(nativeImage.createEmpty());
+    } catch (error2) {
+      console.error("Tray empty", error2);
+      return;
+    }
+  }
   updateTrayTooltip();
   tray.on("double-click", showWindow);
   rebuildTray();
@@ -512,7 +573,6 @@ async function getState() {
     lastSyncAt,
     lastStoreAt,
     nextSyncAt,
-    nextStoreAt,
     packaged: app.isPackaged,
     dataPath: "",
     backupPath: mirrorRoot(),
@@ -601,7 +661,7 @@ async function saveSettings(partial) {
   await writeJson(CONFIG_PATH, next);
   applyOpenAtLogin(next.startWithWindows);
   scheduleSync(next.syncEveryHours);
-  await mirrorUserData(await loadConfig());
+  await mirrorUserData(await loadConfig(), { packaged: app.isPackaged, allowEmpty: false });
   return getState();
 }
 
@@ -623,16 +683,7 @@ function scheduleSync(hours) {
     syncNow({ manual: false, scope: "full" }).catch(() => {});
   }, ms);
   nextSyncAt = Date.now() + ms;
-  scheduleStoreSync();
   rebuildTray();
-}
-
-function scheduleStoreSync() {
-  if (storeTimer) clearInterval(storeTimer);
-  storeTimer = setInterval(() => {
-    syncNow({ manual: false, scope: "store" }).catch(() => {});
-  }, STORE_MS);
-  nextStoreAt = Date.now() + STORE_MS;
 }
 
 function notificationIconPath() {
@@ -696,10 +747,10 @@ async function syncNow({ manual, scope = "full" } = {}) {
     const result =
       (await run({
         scope: storeOnly ? "store" : "full",
+        scrapeGgDeals: Boolean(manual),
         onProgress: (payload) => applySyncProgress(payload),
       })) || {};
     lastStoreAt = new Date().toISOString();
-    nextStoreAt = Date.now() + STORE_MS;
     if (!storeOnly) {
       lastSyncAt = lastStoreAt;
       scheduleSync(config.syncEveryHours);
@@ -824,6 +875,8 @@ ipcMain.handle("import-backup", async () => {
     notifySales: raw.notifySales,
     notifyNews: raw.notifyNews,
     theme: raw.theme,
+    layout: raw.layout,
+    libraryLists: raw.libraryLists,
     backlogSort: raw.backlogSort,
     ...(raw.steamWebApiKey ? { steamWebApiKey: raw.steamWebApiKey } : {}),
   });
@@ -855,19 +908,23 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     setHtmlFetcher(fetchHtml);
     ensureWindowsIcon();
+    diskIconPath = materializeIconFile();
     await createAppShortcuts().catch(() => {});
     createWindow();
     createTray();
     const config = await loadConfig();
-    await hydrateUserData(config).catch(() => {});
-    await mirrorUserData(config).catch(() => {});
-    applyOpenAtLogin(config.startWithWindows);
-    scheduleSync(config.syncEveryHours);
+    await hydrateUserData(config, { packaged: app.isPackaged }).catch((error) => {
+      console.error("hydrateUserData", error);
+    });
+    const hydrated = await loadConfig();
+    await mirrorUserData(hydrated, { packaged: app.isPackaged, allowEmpty: false }).catch((error) => {
+      console.error("mirrorUserData", error);
+    });
+    applyOpenAtLogin(hydrated.startWithWindows);
+    scheduleSync(hydrated.syncEveryHours);
     restorePhoneLink(getStateForPhone, applyPhoneSkip).catch(() => {});
-    if (config.steamId || config.profileUrl) {
+    if (hydrated.steamId || hydrated.profileUrl) {
       setTimeout(() => syncNow({ manual: false, scope: "full" }).catch(() => {}), 8000);
-    } else {
-      setTimeout(() => syncNow({ manual: false, scope: "store" }).catch(() => {}), 5000);
     }
   });
 }
