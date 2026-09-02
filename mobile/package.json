@@ -1,0 +1,26 @@
+{
+  "name": "minha-loja-dos-desejos",
+  "version": "2.0.1",
+  "private": true,
+  "description": "App Android da Minha Loja dos Desejos (Capacitor).",
+  "scripts": {
+    "sync": "npx cap sync android",
+    "open": "npx cap open android",
+    "patch": "node scripts/patch-android.js",
+    "icon": "node scripts/copy-icon.js",
+    "install-sdk": "node scripts/install-android-sdk.js",
+    "apk": "npx cap sync android && node scripts/patch-android.js && node scripts/copy-icon.js && node scripts/assemble-debug.js"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/app": "^7.1.0",
+    "@capacitor/browser": "^7.0.2",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/preferences": "^7.0.2",
+    "@capacitor/splash-screen": "^7.0.3",
+    "@capacitor/status-bar": "^7.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3"
+  }
+}

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Como o app foi feito — Minha Loja dos Desejos</title>
+  <style>
+    @page { size: A4; margin: 16mm 14mm; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; color: #111; line-height: 1.45; font-size: 11pt; }
+    h1 { font-size: 22pt; margin: 0 0 6px; }
+    h2 { font-size: 14pt; margin: 22px 0 8px; border-bottom: 1px solid #ccc; padding-bottom: 4px; page-break-after: avoid; }
+    h3 { font-size: 12pt; margin: 16px 0 6px; page-break-after: avoid; }
+    p, li { orphans: 3; widows: 3; }
+    code, pre { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; }
+    pre { background: #f4f4f6; padding: 10px 12px; overflow: hidden; white-space: pre-wrap; }
+    .meta { color: #555; font-size: 10pt; margin-bottom: 18px; }
+    table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 10pt; }
+    th, td { border: 1px solid #ccc; padding: 5px 7px; text-align: left; vertical-align: top; }
+    th { background: #eee; }
+    .note { background: #fff8e6; border-left: 4px solid #e6b800; padding: 8px 10px; margin: 10px 0; }
+    ol.steps > li { margin-bottom: 8px; }
+    footer { color: #666; font-size: 9pt; margin-top: 28px; }
+  </style>
+</head>
+<body>
+  <h1>Minha Loja dos Desejos</h1>
+  <p class="meta">
+    Manual técnico passo a passo · versão do documento 2026-09-01 ·
+    regenerar com <code>npm run docs:pdf</code> · fonte: <code>Docs/como-o-app-foi-feito.html</code>
+  </p>
+
+  <h2>0. Como usar este PDF</h2>
+  <p>
+    Este arquivo é o mapa do app para quem programa. A fonte é HTML (fácil de editar).
+    Sempre que a arquitetura mudar (nova camada, novo sync, nova persistência), atualize o HTML
+    e rode <code>npm run docs:pdf</code>. Não descreva cada diff de CSS; descreva o <b>porquê</b>
+    e o <b>fluxo</b>.
+  </p>
+
+  <h2>1. O que o produto é</h2>
+  <p>
+    Dashboard local da wishlist Steam, em BRL, com cinco superfícies:
+    <b>Novidades</b>, <b>Wishlist</b>, <b>Loja</b>, <b>Jogos</b>, <b>Não vou jogar</b> (backlog).
+    Nome de exibição: Minha Loja dos Desejos. Código ainda usa pastas <code>SteamControles</code> /
+    <code>dev.steamcontroles.app</code>.
+  </p>
+  <p>
+    Não é um servidor na nuvem. Cada instalação puxa APIs públicas (Steam, gg.deals) e grava JSON no disco.
+    GitHub guarda só código. SteamID, marcações e cache ficam fora do git.
+  </p>
+
+  <h2>2. Passo a passo de como nasceu</h2>
+  <ol class="steps">
+    <li>
+      <b>Caderno no Obsidian.</b> Scripts Node 18+ em <code>Scripts/</code> baixavam a wishlist pública,
+      gravavam <code>Data/*.json</code> e montavam Markdown + HTML estático. Sem npm de runtime,
+      sem TypeScript. O Obsidian corta JS das notas, então o painel lá é HTML morto + CSS de snippet.
+    </li>
+    <li>
+      <b>Motor único.</b> <code>Scripts/updateWishlist.js</code> virou o orquestrador:
+      wishlist → preços → loja → notícias → backlog. <code>steamApi.js</code> fala com a Valve.
+      <code>ggDeals.js</code> raspa o site (Cloudflare). <code>backlog.js</code> junta biblioteca + “Não vou jogar”.
+    </li>
+    <li>
+      <b>Casca Windows: Electron.</b> Chromium + Node no mesmo processo.
+      <code>desktop/main.js</code> (main process) tem janela, bandeja, IPC, timers.
+      <code>desktop/preload.js</code> expõe <code>window.steamApp</code> sem dar Node ao renderer.
+      <code>desktop/renderer/</code> é a UI (HTML/CSS/JS).
+      Programas: Node, npm, Electron 35, electron-builder (gera o exe portable).
+    </li>
+    <li>
+      <b>Login.</b> OpenID oficial da Steam (<code>Scripts/steamLogin.js</code>). Senha nunca passa pelo app.
+      Wishlist precisa estar pública. Biblioteca completa pede Detalhes dos jogos públicos e/ou chave Web API.
+    </li>
+    <li>
+      <b>Celular (depois do PC).</b> Capacitor 7 empacota o mesmo renderer num WebView Android.
+      <code>steamApp.mobile.js</code> imita o preload. Sem o cliente Steam no telefone, Jogos/backlog
+      completos vêm do PC na LAN (<code>desktop/phoneLink.js</code>, porta 17331).
+    </li>
+  </ol>
+
+  <h2>3. Linguagens, pastas, quem faz o quê</h2>
+  <table>
+    <tr><th>Camada</th><th>Pasta</th><th>Linguagem</th><th>Papel</th></tr>
+    <tr><td>Motor</td><td><code>Scripts/</code></td><td>JavaScript / Node</td><td>HTTP, JSON, HTML da Loja/Novidades</td></tr>
+    <tr><td>Disco</td><td><code>Data/</code>, <code>config.json</code></td><td>JSON</td><td>Cache e marcações (gitignored)</td></tr>
+    <tr><td>PC</td><td><code>desktop/</code></td><td>JS + Chromium</td><td>Janela, tray, timers, scrape Chromium</td></tr>
+    <tr><td>UI</td><td><code>desktop/renderer/</code></td><td>HTML, CSS, JS</td><td>Abas, filtros, ajustes</td></tr>
+    <tr><td>Espelho</td><td><code>%AppData%\MinhaLojaDosDesejos\</code></td><td>JSON</td><td>Cópia das marcações sem o usuário abrir arquivo</td></tr>
+    <tr><td>Android</td><td><code>mobile/</code></td><td>JS + um pouco de Java</td><td>APK Capacitor</td></tr>
+  </table>
+
+  <h2>4. De onde vem cada aba (nuvem vs local)</h2>
+  <p>Sim: a maior parte é buscada de sites. Não. Nada disso é “nossa nuvem”. É a nuvem da Valve / do gg.deals.</p>
+  <table>
+    <tr><th>Aba</th><th>Precisa Steam?</th><th>Fonte</th><th>O que é local</th></tr>
+    <tr><td>Wishlist</td><td>Sim (OpenID + wishlist pública)</td><td>Community + store appdetails (BRL)</td><td>Cache <code>wishlist.json</code></td></tr>
+    <tr><td>Novidades</td><td>Sim (é a wishlist)</td><td>Partner events / news da Steam, 7 dias</td><td><code>wishlistUpdates.json</code></td></tr>
+    <tr><td>Loja</td><td>Não</td><td>Steam <code>featuredcategories</code> + gg.deals HTML</td><td><code>storeHub.json</code>, <code>ggPopular.json</code>, <code>ggDeals.json</code></td></tr>
+    <tr><td>Jogos</td><td>Sim (biblioteca)</td><td>Web API e/ou cache do cliente Steam neste PC</td><td>horas em <code>ownedPlaytimes.json</code></td></tr>
+    <tr><td>Não vou jogar</td><td>Sim (é a mesma biblioteca)</td><td>—</td><td><b>marcações do usuário</b> em <code>backlogDone.json</code></td></tr>
+  </table>
+  <div class="note">
+    gg.deals não tem login nosso. Cloudflare bloqueia <code>fetch</code> do Node.
+    No Electron o scrape usa uma janela Chromium oculta (<code>desktop/browserFetch.js</code>)
+    para parecer um Chrome de verdade. Se ainda bloquear, a UI mostra o último ranking salvo — nunca mais
+    uma lista-semente fingindo ser o site.
+  </div>
+
+  <h2>5. Persistência (o ponto das 700 marcações)</h2>
+  <p>
+    Wishlist/notícias/loja <b>voltam da internet</b> depois de reinstalar, desde que o cara conecte a Steam
+    de novo. “Não vou jogar”, cores, intervalo de sync e SteamID <b>não existem na Valve</b>. São dados do app.
+  </p>
+  <ol class="steps">
+    <li>Fonte da verdade das marcações: <code>Data/backlogDone.json</code> (appIds + snapshot do jogo).</li>
+    <li>Espelho automático em <code>%AppData%\Roaming\MinhaLojaDosDesejos\</code>. Desinstalar o atalho não apaga isso.</li>
+    <li>O exe portable grava em <code>%AppData%\Roaming\Minha Loja dos Desejos\</code> (com espaços). O <code>npm run app</code> grava no <code>Data/</code> do vault. São duas casas. Na abertura o app <b>hidrata</b> a casa vazia a partir da mais cheia (espelho ou o <code>source.json</code> apontando para o vault) e <b>nunca copia uma lista vazia por cima de uma cheia</b>.</li>
+    <li>Ajustes → <b>Exportar cópia</b> / <b>Restaurar cópia</b>: JSON único para formatar o Windows ou trocar de PC. Restaurar também devolve cores, layout e listas da aba Jogos.</li>
+    <li>O usuário não precisa abrir pasta nem editar JSON. Caminhos crus saíram da UI de propósito.</li>
+  </ol>
+  <p>
+    Rodando da pasta do vault no OneDrive, o <code>Data/</code> já é sincronizado pelo OneDrive.
+    Apagar a pasta do projeto ainda mata o cache da wishlist — a cópia AppData + o botão Exportar cobrem as marcações.
+  </p>
+
+  <h2>6. Timers de sync (PC)</h2>
+  <ul>
+    <li><b>Loja Steam</b> (hub / mais desejados): junto com o sync da wishlist (6 / 12 / 24 h) e no <b>Atualizar agora</b>. Sem timer de 30 min.</li>
+    <li><b>gg.deals</b> (Chromium + Cloudflare): <b>só</b> no <b>Atualizar agora</b>. O sync automático não abre o site, para não tomar bloqueio. Se o scrape falhar, a UI mostra o último ranking e pede para tentar de novo no botão.</li>
+    <li>Wishlist + Novidades + Jogos/backlog: o que o usuário escolhe em Ajustes (6 / 12 / 24 h). No PC isso é o timer da bandeja. No celular vale ao reabrir o app ou tocar Atualizar. Os dois intervalos são independentes.</li>
+    <li><b>Atualizar agora</b>: sync completo (se estiver logado). Inclui Loja Steam e o scrape do gg.deals.</li>
+    <li>Bug antigo: o scrape do gg.deals era cacheado para sempre no processo Electron. Um “atualizar” não relia o site. Isso foi removido.</li>
+  </ul>
+
+  <h2>7. Disponibilizar para outra pessoa sem ela subir backend</h2>
+  <p>
+    Sim. Cada um instala o <code>.exe</code> ou o APK, conecta a Steam, o app puxa as APIs.
+    Quem recebe <b>não precisa</b> de servidor. Wishlist pública cobre Novidades e Wishlist; Loja nem login precisa.
+    Marcações ficam no aparelho dela (AppData + Exportar cópia).
+  </p>
+  <p>
+    Celular: a primeira ligação Wi‑Fi <b>espelha o PC</b>. Depois wishlist/loja/notícias atualizam na Steam
+    daquele telefone (intervalo próprio nos Ajustes; vale ao reabrir o app). Só a lista
+    <b>Não vou jogar</b> continua cruzando com o PC quando os dois estão na mesma LAN.
+    Fora de casa as marcas novas esperam voltar no Wi‑Fi (ou, no futuro, uma nuvem que <b>nós</b> hospedamos).
+  </p>
+
+  <h2>8. Arquivos-chave para abrir no código</h2>
+  <pre>Scripts/updateWishlist.js   orquestra full vs scope:"store"
+Scripts/steamApi.js         Valve (wishlist, preços, hub, EA gênero 70)
+Scripts/ggDeals.js          parse + scrape; setHtmlFetcher(Chromium)
+Scripts/backlog.js          biblioteca + toggle Não vou jogar
+Scripts/userBackup.js       AppData + export/import
+desktop/main.js             Electron: timers, IPC, login
+desktop/browserFetch.js     HTML via BrowserWindow oculta
+desktop/renderer/app.js     UI
+mobile/                     Capacitor (fase seguinte ao PC)</pre>
+
+  <h2>9. Histórico deste documento</h2>
+  <ul>
+    <li>2026-09-02 — gg.deals só no Atualizar agora; capas das ofertas pela CDN da Steam (sem timer de 30 min).</li>
+    <li>2026-09-01 — hydrate: exe e vault não se apagam; cópia vazia não sobrescreve backlog/cores/listas; listas de Jogos recriam faixas de horas que ainda têm jogos.</li>
+    <li>2026-09-01 — celular: primeiro espelho do PC, depois sync Steam independente; marcas LAN; intervalo próprio ao reabrir.</li>
+    <li>2026-09-01 — primeira versão: origem Obsidian→Electron→Capacitor, persistência AppData, Loja 30 min, scrape Chromium, nuvem para terceiros.</li>
+  </ul>
+
+  <footer>
+    Não commitar <code>config.json</code>, <code>Data/</code>, APK nem chaves. Código: github.com/CristopherBauler/SteamControles
+  </footer>
+</body>
+</html>

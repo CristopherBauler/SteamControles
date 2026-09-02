@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#12161d">
+  <meta name="color-scheme" content="dark">
+  <title>Minha Loja dos Desejos</title>
+  <link rel="stylesheet" href="game-wishlist-dashboard.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Minha Loja dos Desejos</h1>
+      <p class="sub" id="statusLine">Carregando…</p>
+    </div>
+    <div class="actions">
+      <button type="button" class="gear" id="btnSettings" title="Ajustes" aria-label="Ajustes">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64L4.86 10.7c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.16a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54c.05.24.25.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96c.24.1.51.01.64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/>
+        </svg>
+      </button>
+      <button type="button" id="btnSync">Atualizar agora</button>
+      <button type="button" class="ghost desktop-only" id="btnHide">Minimizar</button>
+    </div>
+  </header>
+
+  <section id="setup" class="card setup hidden">
+    <h2>Conectar Steam</h2>
+    <p>A wishlist precisa estar <b>pública</b>. A senha fica só na Steam.</p>
+    <p class="mobile-only">No celular, <b>Entrar com Steam</b> abre o login oficial (OpenID) da Valve neste app. Depois volte sozinho. Se aparecer <b>Acesso negado</b> ou o redirect falhar, cole o SteamID64 abaixo.</p>
+    <div class="row">
+      <button type="button" id="btnLogin">Entrar com Steam</button>
+    </div>
+    <label>Ou cole o SteamID64 / URL do perfil
+      <input id="steamIdInput" placeholder="7656119… ou steamcommunity.com/profiles/…">
+    </label>
+    <label>Chave Web API (opcional, backlog/família)
+      <input id="apiKeyInput" type="password" placeholder="steamcommunity.com/dev/apikey">
+    </label>
+    <button type="button" class="ghost" id="btnSaveSetup">Salvar e sincronizar</button>
+  </section>
+
+  <section id="dash" class="hidden">
+    <nav class="tabs" role="tablist" aria-label="Seções">
+      <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="novidades">Novidades</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="wishlist">Wishlist <span class="tab-count" id="tabCountWishlist"></span></button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="loja">Loja</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="jogos">Jogos <span class="tab-count" id="tabCountJogos"></span></button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="backlog">Backlog <span class="tab-count" id="tabCountBacklog"></span></button>
+    </nav>
+
+    <div id="tab-novidades" class="tab-panel game-wishlist-dashboard" role="tabpanel">
+      <div id="novidades"></div>
+    </div>
+
+    <div id="tab-wishlist" class="tab-panel hidden" role="tabpanel">
+      <div class="stats" id="wishStats">
+        <button type="button" class="stat is-active" data-filter="all">
+          <b id="wishCount">0</b>
+          <span>Wishlist</span>
+        </button>
+        <button type="button" class="stat" data-filter="sale">
+          <b id="saleCount">0</b>
+          <span>Em promo</span>
+        </button>
+        <button type="button" class="stat" data-filter="soon">
+          <b id="comingCount">0</b>
+          <span>Ainda não lançou</span>
+        </button>
+        <button type="button" class="stat" data-filter="full">
+          <b id="fullCount">0</b>
+          <span>Preço normal</span>
+        </button>
+        <button type="button" class="stat stat-ea" data-filter="ea" title="Acesso Antecipado">
+          <b id="eaCount">0</b>
+          <span>EA</span>
+        </button>
+      </div>
+      <input id="search" type="search" placeholder="Buscar pelo nome" autocomplete="off" spellcheck="false">
+      <p class="filter-hint" id="wishHint"></p>
+      <div id="games" class="games"></div>
+    </div>
+
+    <div id="tab-loja" class="tab-panel game-wishlist-dashboard hidden" role="tabpanel">
+      <div id="loja"></div>
+    </div>
+
+    <div id="tab-jogos" class="tab-panel hidden" role="tabpanel">
+      <div class="lib-head">
+        <h2>Jogos</h2>
+        <p class="filter-hint" id="jogosHint"></p>
+      </div>
+      <input id="jogosSearch" class="page-search" type="search" placeholder="Buscar na biblioteca" autocomplete="off" spellcheck="false">
+      <div id="jogos" class="lib-page"></div>
+    </div>
+
+    <div id="tab-backlog" class="tab-panel hidden" role="tabpanel">
+      <div class="lib-head">
+        <div class="lib-head-row">
+          <h2>Não vou jogar</h2>
+          <select id="backlogSort" class="lib-sort" title="Ordenar todos os jogos desta lista" aria-label="Ordenar Não vou jogar">
+            <option value="hours">Horas</option>
+            <option value="reviews">Reviews</option>
+            <option value="name">Nome</option>
+          </select>
+        </div>
+        <p class="filter-hint" id="backlogHint"></p>
+      </div>
+      <input id="backlogSearch" class="page-search" type="search" placeholder="Buscar nesta lista" autocomplete="off" spellcheck="false">
+      <div id="backlogSkipped" class="lib-page lib-skipped"></div>
+    </div>
+  </section>
+
+  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-backdrop" id="settingsBackdrop"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="settingsTitle">Ajustes</h2>
+        <button type="button" class="icon" id="btnCloseSettings" aria-label="Fechar">×</button>
+      </div>
+      <p class="hint mobile-only">Neste celular o intervalo vale quando você <b>abre o app</b> ou toca <b>Atualizar agora</b>. O PC tem o relógio dele (bandeja).</p>
+      <div class="account-box mobile-only" id="pcLinkBox">
+        <p class="account-status" id="pcLinkStatus">Sem vínculo com o PC</p>
+        <p class="hint">Primeira vez (mesmo Wi‑Fi): PC em Ajustes → Conectar celular. Aqui cole IP e código <b>uma vez</b>. O telefone copia wishlist, Jogos e Não vou jogar iguais ao PC. Depois cada um atualiza a Steam sozinho. Marcar Não vou jogar aqui entra no PC na próxima vez que os dois se falarem (Wi‑Fi).</p>
+        <label>IP do PC
+          <input id="pcHostInput" placeholder="192.168.0.10" inputmode="decimal" autocomplete="off" spellcheck="false">
+        </label>
+        <label>Código (só no pareamento)
+          <input id="pcCodeInput" placeholder="já salvo depois de conectar" inputmode="numeric" maxlength="8" autocomplete="off">
+        </label>
+        <button type="button" id="btnPcConnect">Conectar</button>
+        <button type="button" class="ghost" id="btnReseedPc">Puxar tudo do PC de novo</button>
+        <button type="button" class="ghost" id="btnPcDisconnect">Desconectar do PC</button>
+        <p class="hint" id="pcLinkMsg"></p>
+      </div>
+      <div class="account-box">
+        <p class="account-status" id="accountStatus">Não conectado</p>
+        <button type="button" id="btnSteamLogin">Iniciar sessão</button>
+        <button type="button" class="ghost" id="btnLogout">Sair da conta</button>
+        <p class="hint account-hint">A wishlist precisa estar <b>pública</b>. gg.deals é scrape público — não precisa de conta.</p>
+      </div>
+      <div class="account-box pc-only" id="phoneLinkBox">
+        <p class="account-status">Conectar celular</p>
+        <p class="hint">Ligue uma vez e deixe o app na bandeja. O celular cola IP e código só na primeira vez (espelho completo). Depois cada aparelho atualiza a Steam sozinho; Não vou jogar cruza neste Wi‑Fi. Encerrar gera código novo.</p>
+        <button type="button" id="btnPhoneLinkOn">Conectar celular</button>
+        <button type="button" class="ghost" id="btnPhoneLinkOff">Encerrar conexão do celular</button>
+        <p class="pair-code hidden" id="phoneLinkCode"></p>
+        <p class="hint pair-url hidden" id="phoneLinkUrl"></p>
+        <img class="pair-qr hidden" id="phoneLinkQr" alt="QR para parear" width="160" height="160">
+        <p class="hint" id="phoneLinkHint"></p>
+      </div>
+      <label>Wishlist e biblioteca a cada
+        <select id="hours">
+          <option value="6">6 horas</option>
+          <option value="12" selected>12 horas</option>
+          <option value="24">24 horas</option>
+        </select>
+      </label>
+      <p class="hint">Nas abas Novidades, Loja e Jogos arraste o título da seção (como a barra de um navegador) e puxe o canto para o tamanho. Wishlist e Não vou jogar ficam iguais. Cada aba tem o botão Layout padrão.</p>
+      <p class="hint pc-only">No PC o gg.deals só é lido quando você clica em <b>Atualizar agora</b>. O intervalo abaixo vale para wishlist, novidades e biblioteca — não abre o site sozinho.</p>
+      <p class="hint mobile-only">Neste celular o intervalo é o atraso mínimo ao reabrir o app. A Loja também só muda no Atualizar / ao reabrir.</p>
+      <label class="check pc-only"><input type="checkbox" id="notifySales" checked> Avisar promoções</label>
+      <label class="check pc-only"><input type="checkbox" id="notifyNews" checked> Avisar notícias</label>
+      <label class="check desktop-only"><input type="checkbox" id="startWin" checked> Abrir com o Windows</label>
+      <div class="color-head">
+        <p class="hint">Cores</p>
+        <button type="button" class="ghost" id="btnResetColors">Padrão</button>
+      </div>
+      <div class="color-grid">
+        <label class="color-pick">Geral <input type="color" id="colorGeneral" value="#12161d"></label>
+        <label class="color-pick">Botões <input type="color" id="colorButton" value="#2563eb"></label>
+        <label class="color-pick">Novidades <input type="color" id="colorTab-novidades" value="#2563eb"></label>
+        <label class="color-pick">Wishlist <input type="color" id="colorTab-wishlist" value="#2563eb"></label>
+        <label class="color-pick">Loja <input type="color" id="colorTab-loja" value="#2563eb"></label>
+        <label class="color-pick">Jogos <input type="color" id="colorTab-jogos" value="#2563eb"></label>
+        <label class="color-pick">Backlog <input type="color" id="colorTab-backlog" value="#2563eb"></label>
+      </div>
+      <label>Chave Web API (opcional)
+        <input id="apiKeyDash" type="password" placeholder="em branco = não muda">
+      </label>
+      <button type="button" id="btnSaveSettings">Salvar</button>
+      <p class="hint desktop-only">Ícone do app, da bandeja e do atalho</p>
+      <div class="icon-row desktop-only">
+        <img id="iconPreview" src="../icon.png" alt="Ícone atual" width="40" height="40">
+        <div class="stack">
+          <button type="button" class="ghost" id="btnPickIcon">Escolher minha imagem</button>
+          <button type="button" class="ghost" id="btnResetIcon">Ícone padrão</button>
+        </div>
+      </div>
+      <p class="hint" id="iconMsg"></p>
+      <div class="account-box desktop-only">
+        <p class="account-status">Cópia das marcações</p>
+        <p class="hint">Não vou jogar, cores e conta ficam neste PC (como a Steam). Desinstalar o atalho não apaga. Formatar o Windows ou apagar a pasta do projeto apaga — exporte antes.</p>
+        <button type="button" class="ghost" id="btnExportBackup">Exportar cópia</button>
+        <button type="button" class="ghost" id="btnImportBackup">Restaurar cópia</button>
+        <p class="hint" id="backupMsg"></p>
+      </div>
+      <p class="hint desktop-only">Para a barra de tarefas, crie o atalho e fixe <b>Minha Loja dos Desejos</b> — não o electron.exe.</p>
+      <button type="button" class="ghost desktop-only" id="btnShortcut">Criar atalho na área de trabalho</button>
+      <p class="hint desktop-only" id="shortcutMsg"></p>
+      <p class="hint" id="dataPath"></p>
+      <div class="version-box">
+        <p class="hint" id="appVersionLine">Versão</p>
+        <button type="button" class="ghost mobile-only" id="btnDownloadApk">Baixar APK</button>
+        <p class="hint mobile-only">git push não atualiza o APK instalado. Instale de novo o arquivo gerado em <code>mobile/MinhaLojaDosDesejos-debug.apk</code> ou o release no GitHub.</p>
+      </div>
+    </div>
+  </div>
+
+  <p id="error" class="error hidden"></p>
+  <script src="steamApp.mobile.js"></script>
+  <script src="layoutBoard.js"></script>
+  <script src="libraryBoard.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

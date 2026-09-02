@@ -6,9 +6,11 @@
 const fs = require("fs/promises");
 const path = require("path");
 const { readJson, writeJson, nowIso } = require("./config");
-const { fetchOwnedPlaytimes, fetchAppDetails, mapPool } = require("./steamApi");
+const { fetchOwnedPlaytimes, fetchAppDetails, fetchReviews, mapPool } = require("./steamApi");
 
 const NAME_RESOLVE_LIMIT = 15;
+const REVIEW_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const REVIEW_BATCH = 80;
 const SKIP_APP_IDS = new Set([7, 228980, 250820]);
 const SKIP_TYPES = new Set(["config", "tool"]);
 const JUNK_NAME =
@@ -89,15 +91,24 @@ function isBannedCover(url) {
 function coverCandidates(game, cached) {
   const id = Number(game.appId);
   const list = [];
-  if (cached && !isBannedCover(cached)) list.push(cached);
-  list.push(defaultCapsule(id));
-  list.push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`);
-  list.push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`);
-  list.push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`);
-  if (game.logoHash) {
-    list.push(`https://media.steampowered.com/steamcommunity/public/images/apps/${id}/${game.logoHash}.jpg`);
+  const push = (url) => {
+    if (url && !isBannedCover(url)) list.push(url);
+  };
+  push(cached);
+  push(game?.cover);
+  push(game?.coverUrl);
+  push(game?.capsuleImage);
+  push(game?.headerImage);
+  if (Number.isInteger(id) && id > 0) {
+    push(defaultCapsule(id));
+    push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`);
+    push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`);
+    push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`);
   }
-  if (isCommunityLogo(game.logo)) list.push(game.logo);
+  if (game?.logoHash && Number.isInteger(id) && id > 0) {
+    push(`https://media.steampowered.com/steamcommunity/public/images/apps/${id}/${game.logoHash}.jpg`);
+  }
+  if (isCommunityLogo(game?.logo)) push(game.logo);
   return [...new Set(list.filter(Boolean))];
 }
 
@@ -114,40 +125,96 @@ async function headOk(url) {
   }
 }
 
+function coverSourceMap(raw) {
+  return raw?.urls && typeof raw.urls === "object" ? raw.urls : raw || {};
+}
+
 function readCoverMap(raw) {
-  const source = raw?.urls && typeof raw.urls === "object" ? raw.urls : raw || {};
   const urls = {};
-  for (const [key, value] of Object.entries(source)) {
+  for (const [key, value] of Object.entries(coverSourceMap(raw))) {
     if (!/^\d+$/.test(key) || !value || isBannedCover(value)) continue;
     urls[key] = String(value);
   }
   return urls;
 }
 
-async function resolveCovers(games, cachePath) {
-  const urls = readCoverMap(await readJson(cachePath, {}));
+function attachCachedCovers(games, coverMap) {
+  for (const game of games || []) {
+    const cached = coverMap[String(game.appId)];
+    if (!cached || isBannedCover(cached)) continue;
+    game.cover = cached;
+    game.coverUrl = cached;
+  }
+  return games;
+}
+
+async function resolveCovers(games, cachePath, config = {}, options = {}) {
+  const retryFailed = Boolean(options.retryFailed);
+  const raw = await readJson(cachePath, {});
+  const source = { ...coverSourceMap(raw) };
+  const urls = readCoverMap(raw);
   const legacy = readCoverMap(await readJson(path.join(path.dirname(cachePath), "coverUrls.json"), {}));
   for (const [key, value] of Object.entries(legacy)) {
     if (!urls[key]) urls[key] = value;
   }
+  const knownKeys = new Set(Object.keys(source).filter((key) => /^\d+$/.test(key)));
+
+  const reportCover = (current, total) => {
+    if (typeof options.onProgress === "function") {
+      try {
+        options.onProgress(current, total);
+      } catch {
+        // progress hooks must not break cover resolve
+      }
+    }
+  };
+  if (!games?.length) reportCover(1, 1);
 
   await mapPool(games, 8, async (game) => {
-    const cached = urls[String(game.appId)];
-    if (cached && !isBannedCover(cached)) {
-      game.cover = cached;
+    const id = String(game.appId);
+    if (urls[id] && !isBannedCover(urls[id])) {
+      game.cover = urls[id];
+      game.coverUrl = urls[id];
       return;
     }
-    for (const candidate of coverCandidates(game, cached)) {
+    if (!retryFailed && knownKeys.has(id) && !urls[id]) {
+      game.cover = game.cover && !isBannedCover(game.cover) ? game.cover : "";
+      return;
+    }
+    try {
+      const details = await fetchAppDetails(Number(game.appId), {
+        country: config.country || "br",
+        language: config.language || "portuguese",
+        retries: 1,
+        timeoutMs: 8000,
+      });
+      const apiCover = [details?.capsuleImage, details?.headerImage].find(
+        (url) => url && !isBannedCover(url)
+      );
+      if (apiCover) {
+        game.cover = apiCover;
+        game.coverUrl = apiCover;
+        urls[id] = apiCover;
+        return;
+      }
+    } catch {
+      // store API indisponível; cai nos chutes de CDN e tenta de novo no próximo sync
+    }
+    for (const candidate of coverCandidates(game, urls[id])) {
       if (await headOk(candidate)) {
         game.cover = candidate;
-        urls[String(game.appId)] = candidate;
+        game.coverUrl = candidate;
+        urls[id] = candidate;
         return;
       }
     }
-    game.cover = "";
-  });
+    game.cover = game.cover && !isBannedCover(game.cover) ? game.cover : "";
+    if (!urls[id]) urls[id] = "";
+  }, (done, total) => reportCover(done, total));
 
-  await writeJson(cachePath, urls);
+  const out = { ...source };
+  for (const [key, value] of Object.entries(urls)) out[key] = value;
+  await writeJson(cachePath, out);
   return games;
 }
 
@@ -442,6 +509,7 @@ function splitBacklog(games, doneIds, snapshots) {
 
 function coverUrl(game) {
   if (game.cover && !isBannedCover(game.cover)) return game.cover;
+  if (game.coverUrl && !isBannedCover(game.coverUrl)) return game.coverUrl;
   if (isCommunityLogo(game.logo)) return game.logo;
   return "";
 }
@@ -654,6 +722,12 @@ async function saveDoneState(paths, doneGames) {
     appIds,
     games,
   });
+  try {
+    const { mirrorBacklogFiles } = require("./userBackup");
+    await mirrorBacklogFiles(paths, { allowEmpty: true });
+  } catch {
+    // espelho no AppData não pode quebrar a marcação
+  }
 }
 
 async function resolveMissingNames(games, config, cachePath) {
@@ -698,8 +772,19 @@ async function refreshBacklog({
   steamId64 = null,
   ownedPayload = null,
   doneIdsOverride = null,
+  onProgress,
 } = {}) {
   const { paths } = config;
+  const report = (current, total, label) => {
+    if (typeof onProgress === "function") {
+      try {
+        onProgress({ current, total: Math.max(1, total), label: label || "backlog" });
+      } catch {
+        // progress hooks must not break backlog refresh
+      }
+    }
+  };
+  report(0, 1, "backlog");
   await fs.mkdir(paths.data, { recursive: true });
   await fs.mkdir(paths.dashboard, { recursive: true });
 
@@ -751,7 +836,16 @@ async function refreshBacklog({
   const tracked = await loadAndMergeTracked(paths, catalog, snapshots);
   await saveTracked(paths, tracked);
   const { open, done } = splitTracked(tracked, doneIds);
-  await resolveCovers([...open, ...done], path.join(paths.data, "backlogCovers.json"));
+  const coverGames = [...open, ...done];
+  await resolveCovers(coverGames, path.join(paths.data, "backlogCovers.json"), config, {
+    retryFailed: true,
+    onProgress: (current, total) => report(current, total, "capas"),
+  });
+  report(1, 1, "capas");
+  await fillLibraryReviews(config, coverGames, {
+    onProgress: (current, total) => report(current, total, "reviews"),
+  });
+  report(1, 1, "reviews");
 
   const updatedAt = nowIso();
   await writeNoteCopies(
@@ -775,6 +869,147 @@ async function refreshBacklog({
   return { open, done, payload, updatedAt };
 }
 
+function attachReviews(games, cache) {
+  const map = cache?.games && typeof cache.games === "object" ? cache.games : {};
+  for (const game of games || []) {
+    const hit = map[String(game.appId)];
+    if (!hit) continue;
+    if (hit.percent != null && Number.isFinite(Number(hit.percent))) {
+      game.reviewPercent = Number(hit.percent);
+    }
+    game.reviewTotal = Number(hit.total) || 0;
+  }
+}
+
+async function fillLibraryReviews(config, games, options = {}) {
+  const file = config?.paths?.libraryReviews;
+  if (!file) return false;
+  const cache = await readJson(file, { games: {} });
+  if (!cache.games || typeof cache.games !== "object") cache.games = {};
+  const now = Date.now();
+  const stale = (games || []).filter((game) => {
+    const id = Number(game?.appId);
+    if (!Number.isInteger(id) || id <= 0) return false;
+    const hit = cache.games[String(id)];
+    if (!hit || !hit.fetchedAt) return true;
+    const age = now - Date.parse(hit.fetchedAt);
+    return !Number.isFinite(age) || age > REVIEW_TTL_MS;
+  });
+  const batch = stale.slice(0, Number(options.limit) || REVIEW_BATCH);
+  if (!batch.length) {
+    attachReviews(games, cache);
+    return false;
+  }
+  const report = typeof options.onProgress === "function" ? options.onProgress : () => {};
+  let changed = false;
+  await mapPool(batch, 4, async (game) => {
+    const reviews = await fetchReviews(game.appId);
+    const failed = reviews.reviewPercent == null && reviews.reviewTotal == null;
+    if (failed) return;
+    cache.games[String(game.appId)] = {
+      percent: reviews.reviewPercent,
+      total: reviews.reviewTotal || 0,
+      fetchedAt: nowIso(),
+    };
+    changed = true;
+  }, (done, total) => report(done, total));
+  if (changed) {
+    cache.updatedAt = nowIso();
+    await writeJson(file, cache);
+  }
+  attachReviews(games, cache);
+  return changed;
+}
+
+function publicGame(game) {
+  const id = Number(game.appId);
+  const covers = coverCandidates(game, coverUrl(game));
+  return {
+    appId: id,
+    name: game.name || `App ${id}`,
+    cover: coverUrl(game) || covers[0] || "",
+    covers,
+    hours: gameHours(game),
+    family: Boolean(game.family),
+    storeUrl: `https://store.steampowered.com/app/${id}`,
+    reviewPercent: game.reviewPercent != null && Number.isFinite(Number(game.reviewPercent)) ? Number(game.reviewPercent) : null,
+    reviewTotal: Number(game.reviewTotal) || 0,
+  };
+}
+
+async function loadLibraryLists(config) {
+  const { paths } = config;
+  const tracked = readTrackedMap(await readJson(paths.backlogTracked, { games: {} }));
+  const { doneIds, snapshots } = await loadDoneState(paths);
+  for (const snap of Object.values(snapshots || {})) {
+    if (snap?.appId) upsertTracked(tracked, snap);
+  }
+  const { open, done } = splitTracked(tracked, doneIds);
+  const coverPath = path.join(paths.data, "backlogCovers.json");
+  const all = [...open, ...done];
+  attachCachedCovers(all, readCoverMap(await readJson(coverPath, {})));
+  const missing = all.filter((game) => !coverUrl(game));
+  if (missing.length) {
+    await resolveCovers(missing, coverPath, config);
+    attachCachedCovers(all, readCoverMap(await readJson(coverPath, {})));
+  }
+  attachReviews(all, await readJson(paths.libraryReviews, { games: {} }));
+  const payload = await readJson(paths.ownedPlaytimes, {
+    games: [],
+    source: "none",
+    communityPrivate: true,
+  });
+  return {
+    open: open.map(publicGame),
+    done: done.map(publicGame),
+    meta: {
+      source: payload.source || "none",
+      familyComplete: Boolean(payload.familyComplete),
+      familyCount: Number(payload.familyCount || 0),
+      hint: privacyMessage(payload).replace(/\*\*/g, ""),
+      sourceHint: sourceHint(payload),
+    },
+  };
+}
+
+async function toggleSkipped(config, appId, skipped) {
+  const id = Number(appId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return loadLibraryLists(config);
+  }
+  const { paths } = config;
+  const { doneIds, snapshots } = await loadDoneState(paths);
+  if (skipped) doneIds.add(id);
+  else doneIds.delete(id);
+  const tracked = await loadAndMergeTracked(paths, [], snapshots);
+  const { open, done } = splitTracked(tracked, doneIds);
+  attachCachedCovers(
+    [...open, ...done],
+    readCoverMap(await readJson(path.join(paths.data, "backlogCovers.json"), {}))
+  );
+  await saveDoneState(paths, done);
+  const payload = await readJson(paths.ownedPlaytimes, { games: [], source: "none" });
+  const updatedAt = nowIso();
+  await writeNoteCopies(
+    backlogNotePaths(paths),
+    renderBacklog({
+      open,
+      payload,
+      timezone: config.timezone,
+      updatedAt,
+    })
+  );
+  await writeNoteCopies(
+    skippedNotePaths(paths),
+    renderSkipped({
+      done,
+      timezone: config.timezone,
+      updatedAt,
+    })
+  );
+  return loadLibraryLists(config);
+}
+
 module.exports = {
   refreshBacklog,
   renderBacklog,
@@ -782,4 +1017,13 @@ module.exports = {
   splitBacklog,
   parseDoneFromNote,
   gameHours,
+  loadLibraryLists,
+  toggleSkipped,
+  fillLibraryReviews,
+  coverCandidates,
+  coverUrl,
+  defaultCapsule,
+  attachCachedCovers,
+  resolveCovers,
+  isBannedCover,
 };

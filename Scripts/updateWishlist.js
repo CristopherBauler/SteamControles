@@ -18,14 +18,14 @@ const {
   formatBRL,
   paint,
 } = require("./config");
-const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedPlaytimes, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError, isForbiddenError, capsuleUrl } = require("./steamApi");
+const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedPlaytimes, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError, isForbiddenError, capsuleUrl, detectEarlyAccess } = require("./steamApi");
 const { refreshBacklog } = require("./backlog");
-const { fetchGgDealsPopular, fetchGgDealsDeals, resolveDealLists } = require("./ggDeals");
+const { fetchGgDealsPopular, fetchGgDealsDeals, resolveDealLists, enrichDeals } = require("./ggDeals");
 const { collectWishlistUpdates } = require("./wishlistUpdates");
 const { loadHistory, saveHistory, migrateLegacyIfNeeded, appendDaily, summarize, colorStatus, ensureBasePrice } = require("./historyManager");
 const { fetchItadPrices } = require("./stores");
 const { loadExistingNotes, buildNote, writeGameNote } = require("./notes");
-const { writeDashboard } = require("./dashboard");
+const { writeDashboard, isUnreleased } = require("./dashboard");
 
 function hasFlag(name) {
   return process.argv.includes(name);
@@ -61,6 +61,10 @@ function savedFromNote(fm) {
   if (!fm) return null;
   const currentPrice = fm.current_price;
   const saleAmount = fm.sale_amount;
+  const steamTags = String(fm.steam_tags || "")
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
   return {
     name: fm.name,
     headerImage: fm.header_image,
@@ -70,13 +74,13 @@ function savedFromNote(fm) {
       currentPrice != null && saleAmount
         ? roundMoney(Number(currentPrice) + Number(saleAmount))
         : currentPrice,
-    steamTags: String(fm.steam_tags || "")
-      .split(",")
-      .map((tag) => tag.trim())
-      .filter(Boolean),
+    steamTags,
     reviewDesc: fm.review_desc || null,
     reviewPercent: fm.review_percent || null,
     comingSoon: Boolean(fm.coming_soon),
+    earlyAccess: detectEarlyAccess({
+      earlyAccess: fm.early_access == null || fm.early_access === "" ? undefined : Boolean(fm.early_access),
+    }),
     isFree: fm.is_free == null ? undefined : Boolean(fm.is_free),
     nuuvemUrl: fm.nuuvem_url || "",
     gmgUrl: fm.gmg_url || "",
@@ -118,13 +122,17 @@ function detailsFromSaved(item, saved, price) {
     comingSoon: price?.comingSoon != null ? Boolean(price.comingSoon) : Boolean(saved.comingSoon),
     isFree: price?.isFree != null ? Boolean(price.isFree) : Boolean(saved.isFree),
     releaseDate: price?.releaseDate || saved.releaseDate || "",
+    genres: Array.isArray(price?.genres) ? price.genres : saved.genres,
+    earlyAccess: detectEarlyAccess({
+      earlyAccess: price?.earlyAccess != null ? Boolean(price.earlyAccess) : saved.earlyAccess,
+      genres: Array.isArray(price?.genres) ? price.genres : saved.genres,
+    }),
   };
 }
 
 function maybeUnreleased(saved) {
   if (!saved) return false;
-  if (saved.comingSoon) return true;
-  return saved.currentPrice === 0 && saved.isFree !== true;
+  return isUnreleased(saved);
 }
 
 async function writeGgDealsCache(paths, storeHub, stamp) {
@@ -135,7 +143,7 @@ async function writeGgDealsCache(paths, storeHub, stamp) {
   await writeJson(paths.ggDeals, {
     updatedAt: stamp,
     source: "gg.deals",
-    scraped: Boolean(storeHub.ggDealsScraped),
+    scraped: storeHub.ggDealsSkipped ? Boolean(previous.scraped) : Boolean(storeHub.ggDealsScraped),
     newDeals: lists.newDeals,
     bestDeals: lists.bestDeals,
   });
@@ -173,6 +181,8 @@ function detailsStub(item, saved, price) {
     comingSoon: price?.comingSoon,
     isFree: Boolean(price?.isFree),
     releaseDate: price?.releaseDate || "",
+    genres: [],
+    earlyAccess: false,
     unavailable: true,
   };
 }
@@ -182,7 +192,244 @@ async function alreadyRanToday(cachePath, timezone) {
   return cache.lastRunDate === todayInTimezone(timezone);
 }
 
-async function main() {
+function createSyncProgress(onProgress) {
+  const stages = [
+    { id: "wishlist", label: "wishlist", weight: 12 },
+    { id: "loja", label: "loja", weight: 18 },
+    { id: "precos", label: "preços", weight: 35 },
+    { id: "noticias", label: "notícias", weight: 15 },
+    { id: "backlog", label: "backlog", weight: 20 },
+  ];
+  const before = {};
+  let acc = 0;
+  for (const stage of stages) {
+    before[stage.id] = acc;
+    acc += stage.weight;
+  }
+  const byId = Object.fromEntries(stages.map((stage) => [stage.id, stage]));
+  const emit = typeof onProgress === "function" ? onProgress : () => {};
+
+  function report(phase, current, total, label) {
+    const stage = byId[phase] || byId.wishlist;
+    const frac = total > 0 ? Math.max(0, Math.min(1, current / total)) : 0;
+    const raw = before[stage.id] + stage.weight * frac;
+    try {
+      emit({
+        phase: stage.id,
+        label: label || stage.label,
+        current: Number(current) || 0,
+        total: Number(total) || 0,
+        percent: Math.max(0, Math.min(99, Math.round(raw))),
+      });
+    } catch {
+      // UI progress must not abort the sync
+    }
+  }
+
+  return {
+    start(phase, total = 0, label) {
+      report(phase, 0, total, label);
+    },
+    tick(phase, current, total, label) {
+      report(phase, current, total, label);
+    },
+    done(phase, label) {
+      report(phase, 1, 1, label);
+    },
+  };
+}
+
+async function refreshStoreSurfaces({ config, ownedIds, wishlistItems = [], onTick, scrapeGgDeals = false } = {}) {
+  const { paths } = config;
+  const owned = ownedIds instanceof Set ? ownedIds : new Set();
+  let mostWanted = [];
+  let ggPopular = [];
+  let storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [] };
+  let ggScraped = false;
+  const wishIds = new Set((wishlistItems || []).map((item) => Number(item.appId)));
+
+  try {
+    mostWanted = await fetchMostWanted({ country: config.country, language: config.language, limit: 20 });
+    mostWanted = mostWanted.map((game) => ({
+      ...game,
+      owned: owned.has(game.appId),
+      onWishlist: wishIds.has(Number(game.appId)),
+    }));
+    console.log(paint("cyan", `Mais visados: ${mostWanted.slice(0, 8).map((g) => g.name).join(", ")}…`));
+  } catch (error) {
+    const prevWanted = await readJson(paths.mostWanted, { games: [] });
+    mostWanted = prevWanted.games || [];
+    console.log(paint("yellow", `Mais visados indisponíveis: ${error.message}`));
+  }
+  if (onTick) onTick(1);
+
+  try {
+    const hub = await fetchStoreHub({ country: config.country, language: config.language });
+    const mark = (list) =>
+      (list || []).map((item) => ({
+        ...item,
+        owned: item.appId ? owned.has(item.appId) : false,
+      }));
+    storeHub = {
+      events: hub.events || [],
+      specials: mark(hub.specials),
+      newDeals: [],
+      bestDeals: [],
+      dealsStrip: mark(hub.dealsStrip),
+    };
+    console.log(
+      paint("cyan", `Steam hub: ${storeHub.events.length} eventos · ${storeHub.dealsStrip.length} na faixa de descontos`)
+    );
+  } catch (error) {
+    const prevHub = await readJson(paths.storeHub, {
+      events: [],
+      specials: [],
+      dealsStrip: [],
+    });
+    storeHub = {
+      events: prevHub.events || [],
+      specials: prevHub.specials || [],
+      newDeals: [],
+      bestDeals: [],
+      dealsStrip: prevHub.dealsStrip || [],
+    };
+    console.log(paint("yellow", `Destaques Steam indisponíveis: ${error.message}`));
+  }
+  if (onTick) onTick(2);
+
+  const previousGg = await readJson(paths.ggPopular, { games: [] });
+  const previousDeals = await readJson(paths.ggDeals, { newDeals: [], bestDeals: [] });
+
+  if (!scrapeGgDeals) {
+    ggPopular = previousGg.games || [];
+    const lists = resolveDealLists({}, previousDeals);
+    const enrichOpts = {
+      country: config.country,
+      language: config.language,
+      ownedIds: owned,
+      knownGames: [...ggPopular, ...mostWanted],
+    };
+    storeHub = {
+      ...storeHub,
+      newDeals: await enrichDeals(lists.newDeals, { ...enrichOpts, previous: lists.newDeals }),
+      bestDeals: await enrichDeals(lists.bestDeals, { ...enrichOpts, previous: lists.bestDeals }),
+      ggDealsUsd: Boolean(previousDeals.usdOnly),
+      ggDealsScraped: Boolean(previousDeals.scraped),
+      ggDealsSkipped: true,
+    };
+    ggScraped = false;
+    if (onTick) onTick(3);
+    if (onTick) onTick(4);
+  } else {
+    try {
+      const gg = await fetchGgDealsPopular({
+        country: config.country,
+        language: config.language,
+        ownedIds: owned,
+        previous: previousGg.games || [],
+      });
+      ggPopular = gg.games;
+      ggScraped = Boolean(gg.scraped);
+      console.log(
+        paint(
+          "cyan",
+          `gg.deals Most Popular: ${ggPopular.slice(0, 6).map((g) => g.name).join(", ")}…${gg.scraped ? "" : " (ranking em cache)"}`
+        )
+      );
+    } catch (error) {
+      ggPopular = previousGg.games || [];
+      console.log(paint("yellow", `gg.deals Most Popular indisponível: ${error.message}`));
+    }
+    if (onTick) onTick(3);
+
+    try {
+      const deals = await fetchGgDealsDeals({
+        country: config.country,
+        language: config.language,
+        ownedIds: owned,
+        previous: previousDeals,
+        knownGames: [...ggPopular, ...mostWanted],
+      });
+      const lists = resolveDealLists(deals, previousDeals);
+      storeHub = {
+        ...storeHub,
+        newDeals: lists.newDeals,
+        bestDeals: lists.bestDeals,
+        ggDealsUsd: deals.usdOnly,
+        ggDealsScraped: deals.scraped,
+        ggDealsSkipped: false,
+      };
+      ggScraped = ggScraped || Boolean(deals.scraped);
+      const preview = (list) => (list || []).slice(0, 5).map((g) => g.name).join(", ");
+      if (deals.scraped) {
+        console.log(
+          paint("cyan", `gg.deals New deals: ${preview(deals.newDeals)}… · Best deals: ${preview(deals.bestDeals)}…`)
+        );
+      } else {
+        console.log(
+          paint(
+            "yellow",
+            `gg.deals New/Best deals: scrape bloqueado — usando cache (${lists.newDeals.length} + ${lists.bestDeals.length} jogos)`
+          )
+        );
+      }
+    } catch (error) {
+      const lists = resolveDealLists({}, previousDeals);
+      storeHub = {
+        ...storeHub,
+        newDeals: lists.newDeals,
+        bestDeals: lists.bestDeals,
+        ggDealsUsd: false,
+        ggDealsScraped: false,
+        ggDealsSkipped: false,
+      };
+      console.log(paint("yellow", `gg.deals New/Best deals indisponível: ${error.message}`));
+    }
+    if (onTick) onTick(4);
+  }
+
+  const stamp = nowIso();
+  await writeJson(paths.mostWanted, { updatedAt: stamp, games: mostWanted });
+  await writeJson(paths.ggPopular, {
+    updatedAt: stamp,
+    source: "gg.deals",
+    scraped: storeHub.ggDealsSkipped ? Boolean(previousGg.scraped) : ggScraped,
+    games: ggPopular,
+  });
+  const ggLists = await writeGgDealsCache(paths, storeHub, stamp);
+  await writeJson(paths.storeHub, {
+    updatedAt: stamp,
+    ...storeHub,
+    newDeals: ggLists.newDeals,
+    bestDeals: ggLists.bestDeals,
+  });
+  return { mostWanted, ggPopular, storeHub, ggLists, updatedAt: stamp, ggScraped };
+}
+
+async function runStoreOnly(options = {}) {
+  const progress = createSyncProgress(options && options.onProgress);
+  const config = await loadConfig();
+  const ownedFile = await readJson(config.paths.owned, { appIds: [] });
+  const wish = await readJson(config.paths.wishlist, { games: [] });
+  progress.start("loja", 4, "loja");
+  const store = await refreshStoreSurfaces({
+    config,
+    ownedIds: new Set((ownedFile.appIds || []).map(Number)),
+    wishlistItems: wish.games || [],
+    onTick: (n) => progress.tick("loja", n, 4, "loja"),
+    scrapeGgDeals: options.scrapeGgDeals !== false,
+  });
+  progress.done("loja", "loja");
+  return {
+    storeOnly: true,
+    ggScraped: store.ggScraped,
+    updatedAt: store.updatedAt,
+  };
+}
+
+async function main(options = {}) {
+  if (options.scope === "store") return runStoreOnly(options);
+  const progress = createSyncProgress(options && options.onProgress);
   const daily = hasFlag("--daily");
   const config = await loadConfig();
   const { paths } = config;
@@ -196,6 +443,7 @@ async function main() {
   }
 
   console.log(paint("bold", "Steam Wishlist Dashboard v2 — sincronizando\n"));
+  progress.start("wishlist", 4);
 
   const existingNotes = await loadExistingNotes(paths.games);
   const history = await migrateLegacyIfNeeded(paths, config.timezone);
@@ -213,9 +461,11 @@ async function main() {
 
   if (config.steamId || config.profileUrl) {
     steamId64 = await resolveSteamId(config);
+    progress.tick("wishlist", 1, 4);
     console.log(paint("dim", `SteamID64: ${steamId64}`));
     wishlistItems = await fetchWishlist(steamId64);
     source = "steam";
+    progress.tick("wishlist", 2, 4);
     console.log(paint("cyan", `Wishlist pública: ${wishlistItems.length} jogos`));
     try {
       const owned = await fetchOwnedPlaytimes(steamId64, { apiKey: config.steamWebApiKey });
@@ -239,119 +489,33 @@ async function main() {
     } catch (error) {
       console.log(paint("yellow", `Biblioteca: ${error.message}`));
     }
+    progress.tick("wishlist", 3, 4);
   } else {
     const ids = await localAppIds(paths, existingNotes);
     wishlistItems = ids.map((appId) => ({ appId, priority: 0, dateAdded: null }));
+    progress.tick("wishlist", 3, 4);
     console.log(paint("yellow", "config.json sem steamId — rode conectar-steam.bat\n"));
     if (!wishlistItems.length) {
       throw new Error("Nenhum jogo local e nenhum SteamID. Rode conectar-steam.bat.");
     }
   }
 
-  try {
-    mostWanted = await fetchMostWanted({ country: config.country, language: config.language, limit: 20 });
-    mostWanted = mostWanted.map((game) => ({
-      ...game,
-      owned: ownedIds.has(game.appId),
-      onWishlist: wishlistItems.some((item) => item.appId === game.appId),
-    }));
-    console.log(paint("cyan", `Mais visados: ${mostWanted.slice(0, 8).map((g) => g.name).join(", ")}…`));
-  } catch (error) {
-    const prevWanted = await readJson(paths.mostWanted, { games: [] });
-    mostWanted = prevWanted.games || [];
-    console.log(paint("yellow", `Mais visados indisponíveis: ${error.message}`));
-  }
-
-  try {
-    storeHub = await fetchStoreHub({ country: config.country, language: config.language });
-    const mark = (list) =>
-      (list || []).map((item) => ({
-        ...item,
-        owned: item.appId ? ownedIds.has(item.appId) : false,
-      }));
-    storeHub = {
-      events: storeHub.events || [],
-      specials: mark(storeHub.specials),
-      newDeals: [],
-      bestDeals: [],
-      dealsStrip: mark(storeHub.dealsStrip),
-    };
-    console.log(
-      paint(
-        "cyan",
-        `Steam hub: ${storeHub.events.length} eventos · ${storeHub.dealsStrip.length} na faixa de descontos`
-      )
-    );
-  } catch (error) {
-    console.log(paint("yellow", `Destaques Steam indisponíveis: ${error.message}\n`));
-  }
-
-  try {
-    const previousGg = await readJson(paths.ggPopular, { games: [] });
-    const gg = await fetchGgDealsPopular({
-      country: config.country,
-      language: config.language,
-      ownedIds,
-      previous: previousGg.games || [],
-    });
-    ggPopular = gg.games;
-    console.log(
-      paint(
-        "cyan",
-        `gg.deals Most Popular: ${ggPopular.slice(0, 6).map((g) => g.name).join(", ")}…${gg.scraped ? "" : " (ranking em cache, preços atualizados)"}`
-      )
-    );
-  } catch (error) {
-    console.log(paint("yellow", `gg.deals Most Popular indisponível: ${error.message}`));
-  }
-
-  try {
-    const previousDeals = await readJson(paths.ggDeals, { newDeals: [], bestDeals: [] });
-    const deals = await fetchGgDealsDeals({
-      country: config.country,
-      language: config.language,
-      ownedIds,
-      previous: previousDeals,
-      knownGames: [...ggPopular, ...mostWanted],
-    });
-    const lists = resolveDealLists(deals, previousDeals);
-    storeHub = {
-      ...storeHub,
-      newDeals: lists.newDeals,
-      bestDeals: lists.bestDeals,
-      ggDealsUsd: deals.usdOnly,
-      ggDealsScraped: deals.scraped,
-    };
-    const preview = (list) => (list || []).slice(0, 5).map((g) => g.name).join(", ");
-    if (deals.scraped) {
-      console.log(
-        paint(
-          "cyan",
-          `gg.deals New deals: ${preview(deals.newDeals)}… · Best deals: ${preview(deals.bestDeals)}…`
-        )
-      );
-    } else {
-      console.log(
-        paint(
-          "yellow",
-          `gg.deals New/Best deals: scrape bloqueado — usando cache (${lists.newDeals.length} + ${lists.bestDeals.length} jogos)`
-        )
-      );
-    }
-  } catch (error) {
-    const previousDeals = await readJson(paths.ggDeals, { newDeals: [], bestDeals: [] });
-    const lists = resolveDealLists({}, previousDeals);
-    storeHub = {
-      ...storeHub,
-      newDeals: lists.newDeals,
-      bestDeals: lists.bestDeals,
-      ggDealsUsd: false,
-      ggDealsScraped: false,
-    };
-    console.log(paint("yellow", `gg.deals New/Best deals indisponível: ${error.message}`));
-  }
+  progress.done("wishlist");
+  progress.start("loja", 4);
+  const store = await refreshStoreSurfaces({
+    config,
+    ownedIds,
+    wishlistItems,
+    onTick: (n) => progress.tick("loja", n, 4),
+    scrapeGgDeals: options.scrapeGgDeals !== false,
+  });
+  mostWanted = store.mostWanted;
+  ggPopular = store.ggPopular;
+  storeHub = store.storeHub;
+  progress.done("loja");
 
   if (hasFlag("--panel-only")) {
+    progress.done("precos");
     for (const bucket of Object.values(history.games)) {
       ensureBasePrice(bucket);
     }
@@ -393,6 +557,9 @@ async function main() {
           onWishlist: fm.on_wishlist !== false,
           owned: Boolean(fm.owned),
           comingSoon: fm.coming_soon == null || fm.coming_soon === "" ? null : Boolean(fm.coming_soon),
+          earlyAccess: detectEarlyAccess({
+            earlyAccess: fm.early_access == null || fm.early_access === "" ? undefined : Boolean(fm.early_access),
+          }),
           isFree: fm.is_free == null ? fm.current_price === 0 : Boolean(fm.is_free),
           releaseDate: fm.release_date || "",
           storeUrl: fm.store_url,
@@ -411,6 +578,7 @@ async function main() {
     const ggLists = await writeGgDealsCache(paths, storeHub, stamp);
     await writeJson(paths.storeHub, { updatedAt: stamp, ...storeHub, newDeals: ggLists.newDeals, bestDeals: ggLists.bestDeals });
     const previousWish = await readJson(paths.wishlist, { games: [] });
+    progress.start("noticias", gamesFromNotes.length || 1);
     const updates = await collectWishlistUpdates({
       paths,
       games: gamesFromNotes,
@@ -418,6 +586,7 @@ async function main() {
       timezone: config.timezone,
       language: config.language,
       refreshNews: false,
+      onProgress: (p) => progress.tick("noticias", p.current, p.total),
     });
     await writeDashboard(gamesFromNotes, config, {
       mostWanted,
@@ -428,7 +597,15 @@ async function main() {
       wishlistUpdates: updates.events,
       updatedAt: stamp,
     });
-    const backlog = await refreshBacklog({ config, steamId64, ownedPayload });
+    progress.done("noticias");
+    progress.start("backlog");
+    const backlog = await refreshBacklog({
+      config,
+      steamId64,
+      ownedPayload,
+      onProgress: (p) => progress.tick("backlog", p.current, p.total, p.label),
+    });
+    progress.done("backlog");
     const wishCount = gamesFromNotes.filter((game) => game.onWishlist).length;
     console.log(paint("green", `Painel redesenhado com ${wishCount} jogos (sem reconsultar cada preço).`));
     if (updates.newsLimited) {
@@ -445,7 +622,14 @@ async function main() {
           (backlog.payload?.source === "local" ? " (horas do Steam local)" : "")
       )
     );
-    return;
+    return {
+      panelOnly: true,
+      wishCount,
+      events: updates.events || [],
+      freshCount: updates.freshCount || 0,
+      backlogOpen: backlog.open.length,
+      backlogDone: backlog.done.length,
+    };
   }
 
   const wishlistIds = new Set(wishlistItems.map((item) => item.appId));
@@ -486,6 +670,8 @@ async function main() {
   }
 
   console.log(paint("dim", `Checando ${wishlistItems.length} preços em paralelo...`));
+  const priceTotal = Math.max(1, wishlistItems.length * 2);
+  progress.start("precos", priceTotal);
   const priceHits = await mapPool(wishlistItems, PRICE_CONCURRENCY, async (item) => {
     if (steamLimit.tripped) {
       logSteamLimitedOnce();
@@ -508,7 +694,7 @@ async function main() {
         forbidden,
       };
     }
-  });
+  }, (done) => progress.tick("precos", done, priceTotal));
 
   for (let i = 0; i < wishlistItems.length; i += 1) {
     const item = wishlistItems[i];
@@ -552,7 +738,7 @@ async function main() {
         !price429 &&
         !price403 &&
         !steamLimit.tripped &&
-        maybeUnreleased(saved)
+        (maybeUnreleased(saved) || detectEarlyAccess(saved))
       ) {
         reuse = false;
       }
@@ -575,6 +761,10 @@ async function main() {
               details.headerImage = fresh.headerImage;
               details.capsuleImage = fresh.capsuleImage || fresh.headerImage;
               headerUpgraded = true;
+            }
+            if (fresh && !fresh.unavailable) {
+              details.earlyAccess = Boolean(fresh.earlyAccess);
+              if (Array.isArray(fresh.genres)) details.genres = fresh.genres;
             }
           } catch (error) {
             if (isRateLimitError(error)) {
@@ -683,6 +873,7 @@ async function main() {
       failed += 1;
       console.log(paint("red", `falhou: ${error.message}`));
     }
+    progress.tick("precos", wishlistItems.length + i + 1, priceTotal);
   }
 
   for (const appId of removed) {
@@ -751,6 +942,8 @@ async function main() {
       comingSoon: Boolean(game.comingSoon),
       isFree: Boolean(game.isFree || game.currentPrice === 0),
       releaseDate: game.releaseDate || "",
+      genres: Array.isArray(game.genres) ? game.genres : undefined,
+      earlyAccess: Boolean(game.earlyAccess),
       updatedAt: game.updatedAt,
     })),
   });
@@ -780,6 +973,8 @@ async function main() {
   });
   const ggLists = await writeGgDealsCache(paths, storeHub, updatedAt);
   await writeJson(paths.storeHub, { updatedAt, ...storeHub, newDeals: ggLists.newDeals, bestDeals: ggLists.bestDeals });
+  progress.done("precos");
+  progress.start("noticias", gamesOut.length || 1);
   const updates = await collectWishlistUpdates({
     paths,
     games: gamesOut,
@@ -787,6 +982,7 @@ async function main() {
     timezone: config.timezone,
     language: config.language,
     refreshNews: true,
+    onProgress: (p) => progress.tick("noticias", p.current, p.total),
   });
   await writeDashboard(gamesOut, config, {
     mostWanted,
@@ -797,7 +993,15 @@ async function main() {
     wishlistUpdates: updates.events,
     updatedAt,
   });
-  const backlog = await refreshBacklog({ config, steamId64, ownedPayload });
+  progress.done("noticias");
+  progress.start("backlog");
+  const backlog = await refreshBacklog({
+    config,
+    steamId64,
+    ownedPayload,
+    onProgress: (p) => progress.tick("backlog", p.current, p.total, p.label),
+  });
+  progress.done("backlog");
 
   console.log("");
   console.log(
@@ -819,9 +1023,21 @@ async function main() {
   } else {
     console.log(paint("cyan", `Wishlist: ${updates.events.length} atualizações nos últimos 7 dias.`));
   }
+  return {
+    panelOnly: false,
+    wishCount: gamesOut.filter((game) => game.onWishlist).length,
+    events: updates.events || [],
+    freshCount: updates.freshCount || 0,
+    backlogOpen: backlog.open.length,
+    backlogDone: backlog.done.length,
+  };
 }
 
-main().catch((error) => {
-  console.error(paint("red", error.stack || error.message));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(paint("red", error.stack || error.message));
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { run: main };

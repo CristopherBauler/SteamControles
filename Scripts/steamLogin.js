@@ -70,11 +70,11 @@ async function verifyOpenId(query) {
 function openBrowser(url) {
   const command =
     process.platform === "win32"
-      ? `start "" "${url}"`
+      ? `cmd /c start "" "${url}"`
       : process.platform === "darwin"
         ? `open "${url}"`
         : `xdg-open "${url}"`;
-  exec(command);
+  exec(command, { windowsHide: true });
 }
 
 async function saveSteamId(steamId) {
@@ -84,68 +84,91 @@ async function saveSteamId(steamId) {
   await writeJson(CONFIG_PATH, config);
 }
 
-function start() {
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, REALM);
+async function loginWithSteam({ openBrowser: open = true } = {}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (err, steamId) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        server.close();
+      } catch {
+        // already closed
+      }
+      if (err) reject(err);
+      else resolve(steamId);
+    };
 
-    if (url.pathname === "/") {
-      res.writeHead(302, { Location: steamAuthUrl() });
-      res.end();
-      return;
-    }
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, REALM);
 
-    if (url.pathname !== "/callback") {
-      res.writeHead(404);
-      res.end("Not found");
-      return;
-    }
-
-    const query = Object.fromEntries(url.searchParams.entries());
-    try {
-      const valid = await verifyOpenId(query);
-      const steamId = extractSteamId(query["openid.claimed_id"]);
-      if (!valid || !steamId) {
-        throw new Error("A Steam não confirmou o login.");
+      if (url.pathname === "/") {
+        res.writeHead(302, { Location: steamAuthUrl() });
+        res.end();
+        return;
       }
 
-      await saveSteamId(steamId);
-      console.log(paint("green", `\nLogin ok. SteamID64 salvo: ${steamId}`));
-      console.log(paint("yellow", "Deixe a wishlist PÚBLICA: Perfil Steam → Privacidade → Lista de desejos."));
-      console.log(paint("dim", "Pode fechar o navegador e esta janela.\n"));
+      if (url.pathname !== "/callback") {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
 
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(
-        htmlPage(
-          "Steam conectada",
-          `<h1 class="ok">Steam conectada</h1>
-           <p>SteamID <code>${steamId}</code> gravado no <code>config.json</code>.</p>
-           <p class="warn">A lista de desejos precisa estar <strong>pública</strong> para o dashboard ler os jogos.</p>
-           <p>Feche esta aba e volte ao <code>conectar-steam.bat</code>.</p>`
-        )
-      );
-      setTimeout(() => process.exit(0), 400);
-    } catch (error) {
-      console.error(paint("red", error.message));
-      res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(
-        htmlPage("Falha no login", `<h1>Não foi possível conectar</h1><p>${String(error.message)}</p>`)
-      );
-      setTimeout(() => process.exit(1), 800);
-    }
+      const query = Object.fromEntries(url.searchParams.entries());
+      try {
+        const valid = await verifyOpenId(query);
+        const steamId = extractSteamId(query["openid.claimed_id"]);
+        if (!valid || !steamId) {
+          throw new Error("A Steam não confirmou o login.");
+        }
+
+        await saveSteamId(steamId);
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(
+          htmlPage(
+            "Steam conectada",
+            `<h1 class="ok">Steam conectada</h1>
+             <p>SteamID <code>${steamId}</code> gravado.</p>
+             <p class="warn">A lista de desejos precisa estar <strong>pública</strong>.</p>
+             <p>Pode fechar esta aba e voltar ao app.</p>`
+          )
+        );
+        finish(null, steamId);
+      } catch (error) {
+        res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(htmlPage("Falha no login", `<h1>Não foi possível conectar</h1><p>${String(error.message)}</p>`));
+        finish(error);
+      }
+    });
+
+    const timer = setTimeout(() => {
+      finish(new Error("Tempo esgotado. Tente conectar de novo."));
+    }, 5 * 60 * 1000);
+
+    server.listen(PORT, "127.0.0.1", () => {
+      const url = `${REALM}/`;
+      if (open) openBrowser(url);
+    });
+    server.on("error", (error) => finish(error));
   });
-
-  server.listen(PORT, "127.0.0.1", () => {
-    const url = `${REALM}/`;
-    console.log(paint("bold", "Conectar Steam — login oficial no navegador\n"));
-    console.log(paint("dim", "Este projeto nunca recebe sua senha. A Steam autentica e devolve só o ID."));
-    console.log(paint("cyan", `Abrindo ${url}`));
-    openBrowser(url);
-  });
-
-  setTimeout(() => {
-    console.error(paint("red", "Tempo esgotado. Rode de novo: conectar-steam.bat"));
-    process.exit(1);
-  }, 5 * 60 * 1000);
 }
 
-start();
+function start() {
+  loginWithSteam()
+    .then((steamId) => {
+      console.log(paint("green", `\nLogin ok. SteamID64 salvo: ${steamId}`));
+      console.log(paint("yellow", "Deixe a wishlist PÚBLICA: Perfil Steam → Privacidade → Lista de desejos."));
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error(paint("red", error.message));
+      process.exit(1);
+    });
+}
+
+if (require.main === module) {
+  start();
+}
+
+module.exports = { loginWithSteam, start, steamAuthUrl };

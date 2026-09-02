@@ -5,8 +5,67 @@
 const fs = require("fs/promises");
 const path = require("path");
 
-const PROJECT_ROOT = path.resolve(__dirname, "..");
+const PROJECT_ROOT = path.resolve(process.env.STEAM_CONTROLES_HOME || path.join(__dirname, ".."));
 const CONFIG_PATH = path.join(PROJECT_ROOT, "config.json");
+
+const TAB_IDS = ["novidades", "wishlist", "loja", "jogos", "backlog"];
+
+const DEFAULT_THEME = {
+  general: "#12161d",
+  button: "#2563eb",
+  tabs: {
+    novidades: "#2563eb",
+    wishlist: "#2563eb",
+    loja: "#2563eb",
+    jogos: "#2563eb",
+    backlog: "#2563eb",
+  },
+};
+
+const DEFAULT_CONFIG = {
+  steamId: "",
+  profileUrl: "",
+  currency: "BRL",
+  country: "br",
+  language: "portuguese",
+  timezone: "America/Sao_Paulo",
+  updateHour: "08:00",
+  vaultPath: "",
+  projectFolder: "",
+  requestDelayMs: 1000,
+  itadApiKey: "",
+  steamWebApiKey: "",
+  syncEveryHours: 12,
+  startWithWindows: true,
+  notifySales: true,
+  notifyNews: true,
+  theme: { ...DEFAULT_THEME, tabs: { ...DEFAULT_THEME.tabs } },
+  layout: {},
+  libraryLists: { lists: [], pins: {} },
+  backlogSort: "hours",
+};
+
+function normalizeHex(value, fallback) {
+  const raw = String(value || "").trim();
+  const short = raw.match(/^#?([0-9a-f]{3})$/i);
+  if (short) {
+    const [a, b, c] = short[1].split("");
+    return `#${a}${a}${b}${b}${c}${c}`.toLowerCase();
+  }
+  const full = raw.match(/^#?([0-9a-f]{6})$/i);
+  if (full) return `#${full[1].toLowerCase()}`;
+  return fallback;
+}
+
+function normalizeTheme(theme) {
+  const src = theme && typeof theme === "object" ? theme : {};
+  const tabs = src.tabs && typeof src.tabs === "object" ? src.tabs : {};
+  return {
+    general: normalizeHex(src.general, DEFAULT_THEME.general),
+    button: normalizeHex(src.button, DEFAULT_THEME.button),
+    tabs: Object.fromEntries(TAB_IDS.map((id) => [id, normalizeHex(tabs[id], DEFAULT_THEME.tabs[id])])),
+  };
+}
 
 async function readJson(filePath, fallback) {
   try {
@@ -26,12 +85,13 @@ async function writeJson(filePath, data) {
 }
 
 async function loadConfig() {
-  const config = await readJson(CONFIG_PATH, null);
+  let config = await readJson(CONFIG_PATH, null);
   if (!config) {
-    throw new Error(`Arquivo de configuração não encontrado: ${CONFIG_PATH}`);
+    config = { ...DEFAULT_CONFIG };
+    await writeJson(CONFIG_PATH, config);
   }
 
-  const vaultPath = config.vaultPath || path.resolve(PROJECT_ROOT, "..");
+  const vaultPath = config.vaultPath || (process.env.STEAM_CONTROLES_HOME ? PROJECT_ROOT : path.resolve(PROJECT_ROOT, ".."));
   const base = config.projectFolder
     ? path.join(vaultPath, config.projectFolder)
     : PROJECT_ROOT;
@@ -49,6 +109,17 @@ async function loadConfig() {
     requestDelayMs: Number(config.requestDelayMs) > 0 ? Number(config.requestDelayMs) : 1000,
     itadApiKey: String(config.itadApiKey || "").trim(),
     steamWebApiKey: String(config.steamWebApiKey || "").trim(),
+    syncEveryHours: Number(config.syncEveryHours) > 0 ? Number(config.syncEveryHours) : 12,
+    startWithWindows: config.startWithWindows !== false,
+    notifySales: config.notifySales !== false,
+    notifyNews: config.notifyNews !== false,
+    theme: normalizeTheme(config.theme),
+    layout: config.layout && typeof config.layout === "object" && !Array.isArray(config.layout) ? config.layout : {},
+    libraryLists:
+      config.libraryLists && typeof config.libraryLists === "object" && !Array.isArray(config.libraryLists)
+        ? config.libraryLists
+        : { lists: [], pins: {} },
+    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
     paths: {
       root: base,
       config: CONFIG_PATH,
@@ -68,6 +139,7 @@ async function loadConfig() {
       ownedPlaytimes: path.join(base, "Data", "ownedPlaytimes.json"),
       backlogDone: path.join(base, "Data", "backlogDone.json"),
       backlogTracked: path.join(base, "Data", "backlogTracked.json"),
+      libraryReviews: path.join(base, "Data", "libraryReviews.json"),
       dashboardNote: path.join(base, "Dashboard", "Steam Wishlist Dashboard.md"),
       backlogNote: path.join(base, "Dashboard", "Backlog Steam.md"),
       skippedNote: path.join(base, "Dashboard", "Não vou jogar.md"),
@@ -128,6 +200,9 @@ function paint(color, text) {
 module.exports = {
   PROJECT_ROOT,
   CONFIG_PATH,
+  DEFAULT_CONFIG,
+  DEFAULT_THEME,
+  normalizeTheme,
   loadConfig,
   readJson,
   writeJson,

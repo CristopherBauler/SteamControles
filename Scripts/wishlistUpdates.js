@@ -5,7 +5,7 @@
  */
 
 const { readJson, writeJson, nowIso, formatBRL, roundMoney } = require("./config");
-const { fetchPartnerEvents, fetchAppNews, partnerEventImage, mapPool, isRateLimitError } = require("./steamApi");
+const { fetchPartnerEvents, fetchAppNews, partnerEventImage, mapPool, isRateLimitError, detectEarlyAccess } = require("./steamApi");
 
 const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const NEWS_STALE_MS = 4 * 60 * 60 * 1000;
@@ -47,11 +47,7 @@ function comingSoonFlag(game) {
 }
 
 function hasEarlyAccess(game) {
-  if (game?.earlyAccess === true) return true;
-  if (game?.earlyAccess === false) return false;
-  const tags = game?.steamTags || game?.steam_tags || [];
-  const list = Array.isArray(tags) ? tags : String(tags).split(",");
-  return list.some((tag) => /early access|acesso antecipado/i.test(String(tag)));
+  return detectEarlyAccess(game);
 }
 
 function isTbaReleaseDate(date) {
@@ -227,9 +223,15 @@ function eventFromSteam(curr, raw) {
   });
 }
 
-async function fetchWishlistNews(games, { language, refreshNews, fetchedAt }) {
+async function fetchWishlistNews(games, { language, refreshNews, fetchedAt, onProgress } = {}) {
   const stale = !fetchedAt || Date.now() - Date.parse(fetchedAt) > NEWS_STALE_MS;
-  if (!refreshNews && !stale) return { events: [], skipped: true, limited: false };
+  const report = (current, total) => {
+    if (typeof onProgress === "function") onProgress({ current, total });
+  };
+  if (!refreshNews && !stale) {
+    report(1, 1);
+    return { events: [], skipped: true, limited: false };
+  }
 
   let limited = false;
   const rows = await mapPool(games, NEWS_CONCURRENCY, async (curr) => {
@@ -251,7 +253,8 @@ async function fetchWishlistNews(games, { language, refreshNews, fetchedAt }) {
       if (isRateLimitError(error)) limited = true;
       return [];
     }
-  });
+  }, (done, total) => report(done, total));
+  report(games.length || 1, games.length || 1);
   return { events: rows.flat(), skipped: false, limited };
 }
 
@@ -262,6 +265,7 @@ async function collectWishlistUpdates({
   timezone = "America/Sao_Paulo",
   language = "brazilian",
   refreshNews = false,
+  onProgress,
 } = {}) {
   const stored = await readJson(paths.wishlistUpdates, { events: [], lastSeen: {} });
   const lastSeen = stored.lastSeen && typeof stored.lastSeen === "object" ? stored.lastSeen : {};
@@ -282,7 +286,6 @@ async function collectWishlistUpdates({
     const prev = lastSeen[String(curr.appId)] || wishMap.get(curr.appId) || null;
     if (curr.comingSoon == null && prev?.comingSoon != null) curr.comingSoon = prev.comingSoon;
     if (!curr.releaseDate && prev?.releaseDate) curr.releaseDate = prev.releaseDate;
-    if (prev && prev.earlyAccess && curr.earlyAccess == null) curr.earlyAccess = prev.earlyAccess;
     wishNow.push(curr);
     if (prev) {
       const event = detectEvent(prev, curr);
@@ -328,6 +331,7 @@ async function collectWishlistUpdates({
     language,
     refreshNews: refreshNews || existingNews < 2,
     fetchedAt: stored.newsFetchedAt,
+    onProgress,
   });
   if (news.events.length) fresh.push(...news.events);
 

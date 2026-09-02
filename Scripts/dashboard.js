@@ -7,6 +7,7 @@ const fs = require("fs/promises");
 const path = require("path");
 const { formatBRL, readJson } = require("./config");
 const { resolveDealLists } = require("./ggDeals");
+const { capsuleUrl } = require("./steamApi");
 
 function esc(value) {
   return String(value ?? "")
@@ -43,7 +44,49 @@ function badgeText(iso, timezone) {
 const PRICE_COLOR = { queda: "#3dd68c", alta: "#ff6b6b", igual: "#4da3ff" };
 
 function cover(game) {
-  return game?.headerImage || game?.image || "";
+  const raw = String(game?.headerImage || game?.image || "");
+  if (raw && !/img\.gg\.deals/i.test(raw)) return raw;
+  const id = Number(game?.appId);
+  if (Number.isInteger(id) && id > 0) return capsuleUrl(id);
+  return "";
+}
+
+function dealCoverUrls(game) {
+  const urls = [];
+  const seen = new Set();
+  const push = (value) => {
+    const url = String(value || "").trim();
+    if (!url || seen.has(url) || /img\.gg\.deals/i.test(url)) return;
+    seen.add(url);
+    urls.push(url);
+  };
+  const id = Number(game?.appId);
+  push(game?.headerImage);
+  push(game?.image);
+  if (Number.isInteger(id) && id > 0) {
+    push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`);
+    push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/capsule_231x87.jpg`);
+    push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`);
+    push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`);
+  }
+  const gg = String(game?.headerImage || game?.image || "").trim();
+  if (!urls.length && gg) urls.push(gg);
+  return urls;
+}
+
+function dealThumb(game) {
+  const urls = dealCoverUrls(game);
+  if (!urls.length) return `<div class="gwd-deal-ph"></div>`;
+  const rest = urls.slice(1).join("|");
+  return `<img src="${esc(urls[0])}" alt="" referrerpolicy="no-referrer" loading="lazy" data-covers="${esc(rest)}" onerror="dealCoverError(this)">`;
+}
+
+function ggDealsStaleNote(storeHub, ggDeals) {
+  if (storeHub?.ggDealsSkipped) return "";
+  if (ggDeals?.scraped === false || storeHub?.ggDealsScraped === false) {
+    return `<div class="gwd-empty">gg.deals bloqueou a leitura agora — mostrando o último ranking que entrou. Tente de novo em <b>Atualizar agora</b>.</div>`;
+  }
+  return "";
 }
 
 function check(owned) {
@@ -69,16 +112,44 @@ function isTbaReleaseDate(date) {
   return /to be announced|a ser anunciad|em breve|^tba$|coming soon|quando estiver/i.test(text);
 }
 
+function storeAmount(game) {
+  if (game?.currentPrice != null && game.currentPrice !== "") {
+    const n = Number(game.currentPrice);
+    if (Number.isFinite(n)) return n;
+  }
+  const label = String(game?.priceLabel || "").trim();
+  if (!label || label === "—") return null;
+  if (/^free$/i.test(label)) return 0;
+  if (/^em breve$/i.test(label) || /^tba$/i.test(label)) return null;
+  const brl = label.match(/(\d{1,3}(?:\.\d{3})*|\d+),(\d{2})/);
+  if (brl) {
+    const n = Number(`${brl[1].replace(/\./g, "")}.${brl[2]}`);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 function isUnreleased(game) {
-  if (isTbaReleaseDate(game.releaseDate)) return true;
-  if (game.comingSoon === true) return true;
-  const noPrice = game.currentPrice == null;
-  if (game.comingSoon === false) {
-    if (noPrice) return true;
+  const amount = storeAmount(game);
+  if (amount != null && amount > 0) return false;
+  if (game?.comingSoon === false) {
+    if (amount == null) return true;
     return false;
   }
-  if (Number(game.discount) > 0 && game.currentPrice > 0) return false;
-  return noPrice || game.currentPrice === 0;
+  if (isTbaReleaseDate(game?.releaseDate)) return true;
+  if (game?.comingSoon === true) return true;
+  return amount == null || amount === 0;
+}
+
+function byNamePt(a, b) {
+  return String(a.name || "").localeCompare(String(b.name || ""), "pt", { sensitivity: "base" });
+}
+
+function byPriceAsc(a, b) {
+  const pa = Number(a.currentPrice ?? Infinity);
+  const pb = Number(b.currentPrice ?? Infinity);
+  if (pa !== pb) return pa - pb;
+  return Number(b.discount || 0) - Number(a.discount || 0);
 }
 
 function priceLine(game, { soon } = {}) {
@@ -179,15 +250,11 @@ function dealPrice(game) {
 }
 
 function dealRow(game) {
-  const img = cover(game);
-  const thumb = img
-    ? `<img src="${esc(img)}" alt="">`
-    : `<div class="gwd-deal-ph"></div>`;
   const href = game.ggDealsUrl || "#";
   const meta = [game.store || game.source || "gg.deals", game.relativeTime].filter(Boolean).join(" · ");
   const hl = game.historicalLow ? `<span class="gwd-hl" title="Historical low">HL</span>` : "";
   return `<a class="gwd-deal" href="${esc(href)}">
-    ${thumb}
+    ${dealThumb(game)}
     <div class="gwd-deal-main">
       <div class="gwd-deal-name">${check(game.owned)}${esc(game.name)}</div>
       <div class="gwd-deal-src">${esc(meta)}</div>
@@ -260,14 +327,15 @@ function updateCard(event, timezone) {
   </a>`;
 }
 
-function updatesColumn(title, events, timezone, empty) {
+function updatesColumn(title, events, timezone, empty, tileId) {
+  const id = tileId ? ` data-board-tile="${esc(tileId)}"` : "";
   if (!events.length) {
-    return `<div class="gwd-updates-col">
+    return `<div class="gwd-updates-col board-tile"${id}>
       <div class="gwd-updates-col-head">${esc(title)}</div>
       <div class="gwd-updates-quiet">${esc(empty)}</div>
     </div>`;
   }
-  return `<div class="gwd-updates-col">
+  return `<div class="gwd-updates-col board-tile"${id}>
     <div class="gwd-updates-col-head">${esc(title)} <span>${events.length}</span></div>
     <div class="gwd-upd-day-list">${events.map((event) => updateCard(event, timezone)).join("")}</div>
   </div>`;
@@ -281,20 +349,18 @@ function updatesBanner(events, timezone) {
   if (!patches.length && !news.length && !promos.length) {
     return `<div class="gwd-updates gwd-updates-quiet">Nenhuma atualização na wishlist nos últimos 7 dias.</div>`;
   }
-  return `<div class="gwd-updates">
+  return `<div class="gwd-updates" data-board="novidades">
     <div class="gwd-updates-head">Novidades da wishlist</div>
-    <div class="gwd-updates-hint">últimos 7 dias · patches à esquerda · notícias à direita · promoções embaixo</div>
-    <div class="gwd-updates-cols">
-      ${updatesColumn("Atualizações", patches, timezone, "Nenhum patch ou lançamento nesta semana.")}
-      ${updatesColumn("Notícias", news, timezone, "Nenhuma notícia nesta semana.")}
-    </div>
+    <div class="gwd-updates-hint">últimos 7 dias · arraste as seções e mude o tamanho</div>
+    ${updatesColumn("Atualizações", patches, timezone, "Nenhum patch ou lançamento nesta semana.", "patches")}
+    ${updatesColumn("Notícias", news, timezone, "Nenhuma notícia nesta semana.", "news")}
     ${
       promos.length
-        ? `<div class="gwd-updates-promo">
+        ? `<div class="gwd-updates-promo board-tile" data-board-tile="promos">
       <div class="gwd-updates-col-head">Promoções <span>${promos.length}</span></div>
       <div class="gwd-upd-day-list">${promos.map((event) => updateCard(event, timezone)).join("")}</div>
     </div>`
-        : `<div class="gwd-updates-promo">
+        : `<div class="gwd-updates-promo board-tile" data-board-tile="promos">
       <div class="gwd-updates-col-head">Promoções</div>
       <div class="gwd-updates-quiet">Nenhuma promoção nesta semana.</div>
     </div>`
@@ -322,6 +388,63 @@ function wishSearchBlock() {
   ].join("\n");
 }
 
+function storePageHtml({
+  mostWanted = [],
+  ggPopular = [],
+  storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [] },
+  ggDeals = {},
+} = {}) {
+  const popularCards = (mostWanted || [])
+    .map((game) => gameCard(game, { rank: game.rank, href: game.storeUrl }))
+    .join("");
+  const ggCards = (ggPopular || []).map((game) => ggCard(game)).join("");
+  const dealCards = (storeHub.dealsStrip || []).length
+    ? storeHub.dealsStrip
+        .map((item) => {
+          if (item.kind === "event") return eventBanner(item);
+          return gameCard(item, { rank: null, href: item.storeUrl });
+        })
+        .join("")
+    : (storeHub.events || []).map(eventBanner).join("") ||
+      (storeHub.specials || []).map((item) => gameCard(item, { href: item.storeUrl })).join("");
+  const dealLists = resolveDealLists(ggDeals, storeHub);
+  const newDeals =
+    (dealLists.newDeals || []).map(dealRow).join("") ||
+    `<div class="gwd-empty">Sem ofertas novas no gg.deals agora.</div>`;
+  const bestDeals =
+    (dealLists.bestDeals || []).map(dealRow).join("") ||
+    `<div class="gwd-empty">Sem best deals no gg.deals agora.</div>`;
+  const ggLink = { href: "https://gg.deals/", label: "Ver no gg.deals" };
+  const usdNote = storeHub.ggDealsUsd
+    ? `<div class="gwd-empty">Preços como no gg.deals (muitos em USD). A ordem das listas é a do site.</div>`
+    : "";
+  const stale = ggDealsStaleNote(storeHub, ggDeals);
+  return `<div class="gwd-store" data-board="loja">
+    <div class="board-tile" data-board-tile="wanted">
+      ${sectionHead("Mais desejados na Steam", "ranking público da loja · inclui os que você já tem")}
+      ${scrollRow(popularCards)}
+    </div>
+    <div class="board-tile" data-board-tile="popular">
+      ${sectionHead("Most Popular Games", "gg.deals · capas da página da Steam")}
+      ${scrollRow(ggCards)}
+    </div>
+    <div class="board-tile" data-board-tile="steam">
+      ${sectionHead("Descontos e eventos da Steam", "promoções do dia · role para o lado")}
+      ${scrollRow(dealCards)}
+    </div>
+    <div class="board-tile" data-board-tile="newdeals">
+      ${sectionHead("New deals", "gg.deals · New deals", ggLink)}
+      ${newDeals}
+    </div>
+    <div class="board-tile" data-board-tile="bestdeals">
+      ${sectionHead("Best deals", "gg.deals · Best deals", ggLink)}
+      ${bestDeals}
+    </div>
+    ${usdNote}
+    ${stale}
+  </div>`;
+}
+
 function renderDashboard(games, extra = {}) {
   const {
     timezone,
@@ -335,17 +458,13 @@ function renderDashboard(games, extra = {}) {
   } = extra;
 
   const wishAll = [...games].filter((game) => game.onWishlist !== false);
-  const coming = wishAll.filter(isUnreleased).sort((a, b) => String(a.name).localeCompare(String(b.name), "pt"));
+  const coming = wishAll.filter(isUnreleased).sort(byNamePt);
   const onSale = wishAll
     .filter((game) => !isUnreleased(game) && Number(game.discount) > 0)
-    .sort((a, b) => {
-      const dd = Number(b.discount || 0) - Number(a.discount || 0);
-      if (dd) return dd;
-      return Number(a.currentPrice ?? Infinity) - Number(b.currentPrice ?? Infinity);
-    });
+    .sort(byPriceAsc);
   const fullPrice = wishAll
     .filter((game) => !isUnreleased(game) && !Number(game.discount))
-    .sort((a, b) => Number(a.currentPrice ?? Infinity) - Number(b.currentPrice ?? Infinity));
+    .sort(byPriceAsc);
 
   const comingCards = coming.map((game, i) => gameCard(game, { rank: i + 1, href: game.storeUrl, soon: true })).join("");
   const saleCards = onSale.map((game, i) => gameCard(game, { rank: i + 1, href: game.storeUrl })).join("");
@@ -408,7 +527,7 @@ tags:
 
   <div class="gwd-wish-strips">
     ${wishStrip("Ainda não lançou", `${coming.length} jogos · sem preço de verdade`, comingCards)}
-    ${wishStrip("Em promoção", `${onSale.length} jogos · maior desconto na frente`, saleCards)}
+    ${wishStrip("Em promoção", `${onSale.length} jogos · menor preço na frente`, saleCards)}
     ${wishStrip("Preço normal", `${fullPrice.length} jogos · menor preço na frente`, fullCards)}
   </div>
 
@@ -465,4 +584,7 @@ async function writeDashboard(games, config, extra = {}) {
 module.exports = {
   writeDashboard,
   renderDashboard,
+  isUnreleased,
+  updatesBanner,
+  storePageHtml,
 };

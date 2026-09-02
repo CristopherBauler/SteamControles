@@ -1,0 +1,10 @@
+---
+description: Não versionar o PDF técnico do app
+alwaysApply: true
+---
+
+# PDF técnico fica fora do git
+
+Nunca faça stage nem commit de `Docs/Como o app foi feito.pdf`.
+
+A fonte no repositório é `Docs/como-o-app-foi-feito.html`. O PDF só existe localmente (`npm run docs:pdf`) e está no `.gitignore`.

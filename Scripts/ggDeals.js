@@ -182,15 +182,23 @@ function nonemptyDeals(list) {
 
 function resolveDealLists(incoming = {}, previous = {}) {
   return {
-    newDeals: nonemptyDeals(incoming.newDeals) || nonemptyDeals(previous.newDeals) || SEED_DEALS.newDeals,
-    bestDeals: nonemptyDeals(incoming.bestDeals) || nonemptyDeals(previous.bestDeals) || SEED_DEALS.bestDeals,
+    newDeals: nonemptyDeals(incoming.newDeals) || nonemptyDeals(previous.newDeals) || [],
+    bestDeals: nonemptyDeals(incoming.bestDeals) || nonemptyDeals(previous.bestDeals) || [],
   };
 }
 
 const GG_URLS = [
+  "https://gg.deals/?region=br",
   "https://gg.deals/",
-  "https://gg.deals/games/?sort=popularity",
+  "https://gg.deals/games/?sort=popularity&region=br",
 ];
+
+/** Chromium do Electron, se o app estiver rodando. Node fetch sozinho leva Cloudflare. */
+let htmlFetcher = null;
+
+function setHtmlFetcher(fn) {
+  htmlFetcher = typeof fn === "function" ? fn : null;
+}
 
 const GG_HEADERS = {
   "User-Agent":
@@ -200,10 +208,17 @@ const GG_HEADERS = {
 };
 
 async function fetchText(url) {
+  if (htmlFetcher) {
+    const text = await htmlFetcher(url, { timeoutMs: 70000 });
+    if (/just a moment|cf-browser-verification|challenge-platform/i.test(text) && !/___GGEXTRACT___/.test(text)) {
+      throw new Error("Cloudflare");
+    }
+    return text;
+  }
   const response = await fetch(url, {
     headers: GG_HEADERS,
     redirect: "follow",
-    signal: AbortSignal.timeout(4000),
+    signal: AbortSignal.timeout(12000),
   });
   const text = await response.text();
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -237,10 +252,75 @@ function slugify(name) {
     .replace(/^-|-$/g, "");
 }
 
+function parseExtractBlob(text) {
+  const match = String(text || "").match(/___GGEXTRACT___\n([\s\S]*?)\n___\/GGEXTRACT___/);
+  if (!match) return null;
+  try {
+    const data = JSON.parse(match[1]);
+    if (!data || typeof data !== "object") return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function dealsFromExtractRows(rows) {
+  const games = [];
+  const seen = new Set();
+  for (const row of rows || []) {
+    const name = decodeHtml(row?.name || "")
+      .replace(/\s+PC$/i, "")
+      .trim();
+    if (!isDealName(name)) continue;
+    const key = String(row.slug || name).toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    games.push(
+      dealFromParts(name, row.text || "", {
+        slug: row.slug,
+        appId: row.appId,
+        image: row.img,
+      })
+    );
+    if (games.length >= 12) break;
+  }
+  return games;
+}
+
+function popularFromExtractRows(rows) {
+  return dealsFromExtractRows(rows).map((game, i) => ({
+    rank: i + 1,
+    name: game.name,
+    discount: game.discount,
+    usdPrice: game.usdPrice,
+    currentPrice: game.currentPrice,
+    ggDealsUrl: game.ggDealsUrl,
+    appId: game.appId,
+    image: game.image,
+    source: "gg.deals",
+  }));
+}
+
+function isolateMdSection(text, heading, nextHeadings = []) {
+  const escaped = String(heading).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const start = String(text || "").search(new RegExp(`(?:^|\\n)##\\s*${escaped}\\b`, "i"));
+  if (start < 0) return "";
+  let chunk = text.slice(start);
+  if (!nextHeadings.length) return chunk;
+  const next = nextHeadings
+    .map((h) => String(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .map((h) => `(?:\\n##\\s*)${h}\\b`)
+    .join("|");
+  const cut = chunk.slice(8).search(new RegExp(next, "i"));
+  if (cut >= 0) chunk = chunk.slice(0, 8 + cut);
+  return chunk;
+}
+
 function isolateSection(text, heading, nextHeadings = []) {
   const escaped = String(heading).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const slug = escaped.replace(/\\s\+/g, "[-\\s]+").replace(/\s+/g, "[-\\s]+");
   const headingRe = new RegExp(
-    `(?:##\\s*|<h[1-3][^>]*>)${escaped}\\b|See all ${escaped}|id="[^"]*${escaped.replace(/\s+/g, "[-\\s]+")}[^"]*"`,
+    `(?:##\\s*|<h[1-4][^>]*>|>)${escaped}\\b|See all ${escaped}|id="[^"]*${slug}[^"]*"`,
     "i"
   );
   const start = text.search(headingRe);
@@ -249,7 +329,7 @@ function isolateSection(text, heading, nextHeadings = []) {
   if (!nextHeadings.length) return chunk;
   const next = nextHeadings
     .map((h) => String(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .map((h) => `(?:\\n##\\s*|<h[1-3][^>]*>)${h}\\b`)
+    .map((h) => `(?:\\n##\\s*|<h[1-4][^>]*>|>)${h}\\b`)
     .join("|");
   const cut = chunk.slice(48).search(new RegExp(next, "i"));
   if (cut >= 0) chunk = chunk.slice(0, 48 + cut);
@@ -311,6 +391,10 @@ function parseStore(text) {
   return "Steam";
 }
 
+function isSteamStore(store) {
+  return !store || /\bsteam\b/i.test(String(store));
+}
+
 function parseRelativeTime(text) {
   const m = String(text || "").match(
     /(\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?|mins?|hrs?|secs?)\s+ago|\d+\s*[smhd]\s*ago|just now|yesterday|há\s+\d+\s+[^\n<,]+)/i
@@ -369,7 +453,11 @@ function dealFromParts(name, body, extra = {}) {
   const price = parseDealPrice(blob);
   const slug = extra.slug || blob.match(/gg\.deals\/game\/([^/"'\s]+)/i)?.[1] || slugify(name);
   const appIdRaw = Number(
-    extra.appId || blob.match(/steam\/app\/(\d+)/i)?.[1] || blob.match(/data-(?:steam-)?app-id="(\d+)"/i)?.[1]
+    extra.appId ||
+      blob.match(/steam\/app\/(\d+)/i)?.[1] ||
+      blob.match(/steam\/apps\/(\d+)/i)?.[1] ||
+      String(extra.image || "").match(/steam\/apps\/(\d+)/i)?.[1] ||
+      blob.match(/data-(?:steam-)?app-id="(\d+)"/i)?.[1]
   );
   const appId = Number.isInteger(appIdRaw) && appIdRaw > 0 ? appIdRaw : null;
   const image = extra.image || "";
@@ -412,7 +500,7 @@ function parseDealsFromText(chunk) {
 function parseDealsFromHtml(chunk) {
   const games = [];
   const seen = new Set();
-  const re = /href="(?:https:\/\/gg\.deals)?\/(?:game\/([^"/]+)|steam\/app\/(\d+))\/*"/gi;
+  const re = /href=["'](?:https:\/\/gg\.deals)?\/(?:game\/([^"'/?#]+)|steam\/app\/(\d+))/gi;
   let match;
   while ((match = re.exec(chunk)) && games.length < 12) {
     const slug = match[1] || "";
@@ -429,6 +517,8 @@ function parseDealsFromHtml(chunk) {
     );
     if (!isDealName(name)) continue;
     const img =
+      window.match(/src="(https:\/\/shared\.[^"]+steam\/apps\/\d+[^"]+)"/i)?.[1] ||
+      window.match(/src="(https:\/\/cdn\.[^"]+steam\/apps\/\d+[^"]+)"/i)?.[1] ||
       window.match(/src="(https:\/\/img\.gg\.deals\/[^"]+)"/i)?.[1] ||
       window.match(/src="(https:\/\/[^"]+game[^"]+\.(?:jpg|png|webp)[^"]*)"/i)?.[1] ||
       "";
@@ -449,27 +539,47 @@ function parseDealsFromHtml(chunk) {
 }
 
 function parseDealSection(text, heading, nextHeadings) {
+  const md = isolateMdSection(text, heading, nextHeadings);
+  if (md) {
+    const fromMd = parseDealsFromText(md);
+    if (fromMd.length >= 5) return fromMd.slice(0, 10);
+    const htmlInMd = /href=|<a\s/i.test(md) ? parseDealsFromHtml(md) : [];
+    if (htmlInMd.length >= 5) return htmlInMd.slice(0, 10);
+    if (fromMd.length) return fromMd.slice(0, 10);
+  }
   const chunk = isolateSection(text, heading, nextHeadings);
   if (!chunk) return [];
   const fromHtml = /href=|<a\s/i.test(chunk) ? parseDealsFromHtml(chunk) : [];
   const fromText = parseDealsFromText(chunk);
+  if (fromText.length >= 5) return fromText.slice(0, 10);
   if (fromHtml.length >= 5) return fromHtml.slice(0, 10);
   if (fromText.length) return fromText.slice(0, 10);
   return fromHtml.slice(0, 10);
 }
 
 function parseDealListPage(text) {
-  const section = parseDealSection(text, "New deals", ["Best deals", "Historical lows"]);
-  if (section.length >= 5) return section;
+  for (const heading of ["New deals", "New game deals", "Best deals", "Best game deals"]) {
+    const section = parseDealSection(text, heading, [
+      "Best deals",
+      "Best game deals",
+      "Historical lows",
+      "Most Popular",
+    ]);
+    if (section.length >= 5) return section;
+  }
   const html = parseDealsFromHtml(text);
   if (html.length) return html.slice(0, 10);
   return parseDealsFromText(text).slice(0, 10);
 }
 
 function parsePopular(text) {
-  const fromHtml = /<html/i.test(text) ? parsePopularFromHtml(text) : [];
+  const md = isolateMdSection(text, "Most Popular Games", ["New deals", "Best deals"]);
+  const fromMd = md ? parsePopularFromText(md) : [];
+  if (fromMd.length >= 5) return fromMd;
   const fromText = parsePopularFromText(text);
-  return fromHtml.length >= 10 ? fromHtml : fromText;
+  if (fromText.length >= 5) return fromText;
+  const fromHtml = /<html/i.test(text) ? parsePopularFromHtml(text) : [];
+  return fromHtml.length >= fromText.length ? fromHtml : fromText;
 }
 
 function isolatePopularChunk(text) {
@@ -519,7 +629,7 @@ function parsePopularFromHtml(html) {
   const chunk = isolatePopularChunk(html);
   const games = [];
   const seen = new Set();
-  const re = /href="(?:https:\/\/gg\.deals)?\/game\/([^"/]+)\/*"/gi;
+  const re = /href=["'](?:https:\/\/gg\.deals)?\/game\/([^"'/?#]+)/gi;
   let match;
   while ((match = re.exec(chunk)) && games.length < 20) {
     const slug = match[1];
@@ -548,6 +658,10 @@ function parsePopularFromHtml(html) {
 
 let homeInflight = null;
 
+function beginGgScrapeSession() {
+  homeInflight = null;
+}
+
 async function scrapeGgDealsHomeUncached() {
   let lastError;
   let popular = [];
@@ -559,9 +673,25 @@ async function scrapeGgDealsHomeUncached() {
     try {
       const text = await fetchText(url);
       sourceUrl = url;
-      popular = parsePopular(text);
-      newDeals = parseDealSection(text, "New deals", ["Best deals", "Historical lows"]);
-      bestDeals = parseDealSection(text, "Best deals", ["Historical lows", "Popular wishlisted"]);
+      const extract = parseExtractBlob(text);
+      if (extract) {
+        popular = popularFromExtractRows(extract.popular);
+        newDeals = dealsFromExtractRows(extract.newDeals);
+        bestDeals = dealsFromExtractRows(extract.bestDeals);
+      }
+      if (!popular.length) popular = parsePopular(text);
+      if (!newDeals.length) {
+        newDeals = parseDealSection(text, "New deals", ["Best deals", "Historical lows"]);
+      }
+      if (!newDeals.length) {
+        newDeals = parseDealSection(text, "New game deals", ["Best deals", "Best game deals", "Historical lows"]);
+      }
+      if (!bestDeals.length) {
+        bestDeals = parseDealSection(text, "Best deals", ["Historical lows", "Popular wishlisted"]);
+      }
+      if (!bestDeals.length) {
+        bestDeals = parseDealSection(text, "Best game deals", ["Historical lows", "Popular wishlisted"]);
+      }
       if (popular.length || newDeals.length || bestDeals.length) break;
     } catch (error) {
       lastError = error;
@@ -574,14 +704,14 @@ async function scrapeGgDealsHomeUncached() {
 
   if (!newDeals.length) {
     try {
-      newDeals = parseDealListPage(await fetchText("https://gg.deals/deals/new-deals/"));
+      newDeals = parseDealListPage(await fetchText("https://gg.deals/deals/new-deals/?region=br"));
     } catch {
       /* homepage already tried */
     }
   }
   if (!bestDeals.length) {
     try {
-      bestDeals = parseDealListPage(await fetchText("https://gg.deals/deals/best-deals/"));
+      bestDeals = parseDealListPage(await fetchText("https://gg.deals/deals/best-deals/?region=br"));
     } catch {
       /* homepage already tried */
     }
@@ -592,15 +722,20 @@ async function scrapeGgDealsHomeUncached() {
 
 function scrapeGgDealsHome() {
   if (!homeInflight) {
-    homeInflight = scrapeGgDealsHomeUncached();
+    const pending = scrapeGgDealsHomeUncached();
+    homeInflight = pending;
+    pending.finally(() => {
+      setTimeout(() => {
+        if (homeInflight === pending) homeInflight = null;
+      }, 8000);
+    });
   }
   return homeInflight;
 }
 
 async function scrapeGgDeals() {
   const home = await scrapeGgDealsHome();
-  if (!home.popular.length) throw new Error("gg.deals indisponível");
-  return { games: home.popular, sourceUrl: home.sourceUrl };
+  return { games: home.popular || [], sourceUrl: home.sourceUrl };
 }
 
 function namesMatch(a, b) {
@@ -688,46 +823,39 @@ async function enrichWithSteam(games, { country, language, ownedIds, previous = 
   });
 }
 
-function fillPopularRanking(primary, previous) {
-  const ranking = [];
-  const seen = new Set();
-  const prevByName = new Map((previous || []).filter((g) => g?.name).map((g) => [normName(g.name), g]));
-  const push = (game) => {
-    if (!game?.name || ranking.length >= 20) return;
-    const key = normName(game.name);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    const cached = prevByName.get(key);
-    ranking.push({
-      rank: ranking.length + 1,
-      name: game.name,
-      discount: game.discount || cached?.discount || 0,
-      currentPrice: game.currentPrice ?? cached?.currentPrice,
-      ggDealsUrl: game.ggDealsUrl || cached?.ggDealsUrl || `https://gg.deals/game/${slugify(game.name)}/`,
-      appId: Number(game.appId) || Number(cached?.appId) || BOOTSTRAP_IDS[key] || null,
-      image: game.image || game.headerImage || cached?.image || cached?.headerImage || "",
-      headerImage: game.headerImage || game.image || cached?.headerImage || cached?.image || "",
-      source: "gg.deals",
-    });
+function rankRow(game, i, cached) {
+  return {
+    rank: i + 1,
+    name: game.name,
+    discount: game.discount || cached?.discount || 0,
+    currentPrice: game.currentPrice ?? cached?.currentPrice,
+    ggDealsUrl: game.ggDealsUrl || cached?.ggDealsUrl || `https://gg.deals/game/${slugify(game.name)}/`,
+    appId: Number(game.appId) || Number(cached?.appId) || BOOTSTRAP_IDS[normName(game.name)] || null,
+    image: game.image || game.headerImage || cached?.image || cached?.headerImage || "",
+    headerImage: game.headerImage || game.image || cached?.headerImage || cached?.image || "",
+    source: "gg.deals",
   };
+}
+
+function fillPopularRanking(primary, previous) {
+  const prevByName = new Map((previous || []).filter((g) => g?.name).map((g) => [normName(g.name), g]));
   const scraped = (primary || []).filter((game) => game?.name);
-  if (scraped.length >= 10) {
-    for (const game of scraped) push(game);
+  if (scraped.length >= 5) {
+    return scraped.slice(0, 20).map((game, i) => rankRow(game, i, prevByName.get(normName(game.name))));
   }
-  for (const name of BOOTSTRAP) {
-    const cached = prevByName.get(normName(name)) || {};
-    push({
-      ...cached,
-      name,
-      appId: cached.appId || BOOTSTRAP_IDS[normName(name)] || null,
-    });
+  const leftover = [...(previous || [])]
+    .filter((game) => game?.name)
+    .sort((a, b) => Number(a.rank || 99) - Number(b.rank || 99));
+  if (leftover.length) {
+    return leftover.slice(0, 20).map((game, i) => rankRow(game, i, prevByName.get(normName(game.name))));
   }
-  const leftover = [...(previous || [])].sort((a, b) => Number(a.rank || 99) - Number(b.rank || 99));
-  for (const game of leftover) push(game);
-  return ranking.slice(0, 20);
+  return BOOTSTRAP.slice(0, 20).map((name, i) =>
+    rankRow({ name, appId: BOOTSTRAP_IDS[normName(name)] || null }, i, prevByName.get(normName(name)))
+  );
 }
 
 async function fetchGgDealsPopular({ country, language, ownedIds, previous = [] } = {}) {
+  beginGgScrapeSession();
   let scrapedList = [];
   let scraped = false;
   try {
@@ -787,8 +915,23 @@ function indexAppIds(lists) {
   return map;
 }
 
-function isSteamStore(store) {
-  return !store || /^steam$/i.test(store);
+function isGgDealsCdn(url) {
+  return /img\.gg\.deals/i.test(String(url || ""));
+}
+
+function dealSteamCover(appId) {
+  const id = Number(appId);
+  if (!Number.isInteger(id) || id <= 0) return "";
+  return `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`;
+}
+
+function searchAliases(name) {
+  const base = String(name || "")
+    .replace(/\s+PC$/i, "")
+    .trim();
+  const aliases = [base];
+  if (base.includes("|")) aliases.push(base.split("|")[0].trim());
+  return [...new Set(aliases.filter((item) => item.length >= 2))];
 }
 
 async function enrichDeals(games, { country, language, ownedIds, previous = [], knownGames = [] } = {}) {
@@ -797,7 +940,9 @@ async function enrichDeals(games, { country, language, ownedIds, previous = [], 
   const prepared = (games || []).map((game) => {
     const cached = (previous || []).find((p) => normName(p.name) === normName(game.name));
     const appId = Number(game.appId) || known.get(normName(game.name)) || Number(cached?.appId) || null;
-    const image = game.image || cached?.image || cached?.headerImage || (appId ? capsuleUrl(appId) : "");
+    const steam = dealSteamCover(appId);
+    const raw = game.image || cached?.image || cached?.headerImage || "";
+    const image = steam || (isGgDealsCdn(raw) ? "" : raw);
     return {
       ...game,
       appId: Number.isInteger(appId) && appId > 0 ? appId : null,
@@ -817,8 +962,12 @@ async function enrichDeals(games, { country, language, ownedIds, previous = [], 
   const found = await mapPool(missing, 4, async ({ game }) => {
     if (rateLimited) return null;
     try {
-      const hit = await searchSteamStore(game.name, { country, language, timeoutMs: 4000 });
-      if (hit?.appId && namesMatch(game.name, hit.steamName)) return hit;
+      for (const query of searchAliases(game.name)) {
+        const hit = await searchSteamStore(query, { country, language, timeoutMs: 4000 });
+        if (hit?.appId && (namesMatch(game.name, hit.steamName) || namesMatch(query, hit.steamName))) {
+          return hit;
+        }
+      }
     } catch (error) {
       if (isRateLimitError(error)) rateLimited = true;
     }
@@ -830,10 +979,8 @@ async function enrichDeals(games, { country, language, ownedIds, previous = [], 
     if (!hit?.appId) continue;
     const game = prepared[missing[i].index];
     game.appId = hit.appId;
-    if (!game.image) {
-      game.image = hit.tinyImage || capsuleUrl(hit.appId);
-      game.headerImage = game.image;
-    }
+    game.image = capsuleUrl(hit.appId) || hit.tinyImage || "";
+    game.headerImage = game.image;
     if (isSteamStore(game.store) && game.currentPrice !== 0 && hit.currentPrice != null) {
       game.currentPrice = hit.currentPrice;
       game.currency = "BRL";
@@ -844,14 +991,20 @@ async function enrichDeals(games, { country, language, ownedIds, previous = [], 
     }
   }
 
-  return prepared.map((game) => ({
-    ...game,
-    owned: Boolean(game.appId && owned.has(game.appId)),
-    source: game.store || game.source || "gg.deals",
-    ggDealsUrl:
-      game.ggDealsUrl ||
-      (game.appId ? `https://gg.deals/steam/app/${game.appId}/` : `https://gg.deals/game/${slugify(game.name)}/`),
-  }));
+  return prepared.map((game) => {
+    const steam = dealSteamCover(game.appId);
+    const image = steam || (isGgDealsCdn(game.image) ? "" : game.image) || "";
+    return {
+      ...game,
+      image,
+      headerImage: steam || (isGgDealsCdn(game.headerImage) ? "" : game.headerImage) || image,
+      owned: Boolean(game.appId && owned.has(game.appId)),
+      source: game.store || game.source || "gg.deals",
+      ggDealsUrl:
+        game.ggDealsUrl ||
+        (game.appId ? `https://gg.deals/steam/app/${game.appId}/` : `https://gg.deals/game/${slugify(game.name)}/`),
+    };
+  });
 }
 
 function usdOnlyDeals(lists) {
@@ -921,12 +1074,16 @@ async function fetchGgDealsDeals({
     knownGames,
   };
   const fromCache = (list) =>
-    (list || []).map((game) => ({
-      ...game,
-      owned: Boolean(game.appId && ownedIds?.has(game.appId)),
-      image: game.image || game.headerImage || (game.appId ? capsuleUrl(game.appId) : ""),
-      headerImage: game.headerImage || game.image || (game.appId ? capsuleUrl(game.appId) : ""),
-    }));
+    (list || []).map((game) => {
+      const steam = dealSteamCover(game.appId);
+      const image = steam || (isGgDealsCdn(game.image) ? "" : game.image) || (isGgDealsCdn(game.headerImage) ? "" : game.headerImage) || "";
+      return {
+        ...game,
+        owned: Boolean(game.appId && ownedIds?.has(game.appId)),
+        image,
+        headerImage: image,
+      };
+    });
 
   newDeals = scrapedNew
     ? await enrichDeals(newDeals, { ...opts, previous: prevNew })
@@ -952,6 +1109,9 @@ module.exports = {
   fetchGgDealsPopular,
   fetchGgDealsDeals,
   resolveDealLists,
+  enrichDeals,
+  setHtmlFetcher,
+  beginGgScrapeSession,
   SEED_DEALS,
   parsePopularFromText,
   parsePopularFromHtml,
