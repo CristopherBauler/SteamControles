@@ -18,11 +18,10 @@
       promos: { i: 2, w: 12, h: 16 },
     },
     loja: {
-      wanted: { i: 0, w: 12, h: 15 },
+      steam: { i: 0, w: 12, h: 36 },
       popular: { i: 1, w: 12, h: 15 },
-      steam: { i: 2, w: 12, h: 15 },
-      newdeals: { i: 3, w: 6, h: 24 },
-      bestdeals: { i: 4, w: 6, h: 24 },
+      newdeals: { i: 2, w: 6, h: 24 },
+      bestdeals: { i: 3, w: 6, h: 24 },
     },
     jogos: {
       h100: { i: 0, w: 12, h: 16 },
@@ -58,10 +57,17 @@
     const out = {};
     for (const [id, def] of Object.entries(base)) {
       const hit = extra[id] && typeof extra[id] === "object" ? extra[id] : {};
+      const rawH = Number(hit.h);
+      const savedH =
+        boardId === "loja" && id === "steam" && rawH === 15
+          ? def.h
+          : Number.isFinite(rawH) && rawH > 0
+            ? rawH
+            : def.h;
       out[id] = {
         i: Number.isFinite(Number(hit.i)) ? Number(hit.i) : def.i,
         w: clamp(Number(hit.w) || def.w, MIN_W, MAX_W),
-        h: clamp(Number(hit.h) || def.h, MIN_H, MAX_H),
+        h: clamp(savedH, MIN_H, MAX_H),
       };
     }
     for (const [id, hit] of Object.entries(extra)) {
@@ -185,6 +191,7 @@
         <button type="button" class="board-reset">Layout padrão</button>
       </div>`;
     const after =
+      root.querySelector(":scope > .lib-epic-cta") ||
       root.querySelector(":scope > .lib-meta") ||
       root.querySelector(":scope > .gwd-updates-hint") ||
       root.querySelector(":scope > .gwd-updates-head");
@@ -243,6 +250,7 @@
         root.querySelector(":scope > .gwd-updates-head"),
         root.querySelector(":scope > .gwd-updates-hint"),
         root.querySelector(":scope > .lib-meta"),
+        root.querySelector(":scope > .lib-epic-cta"),
       ].filter(Boolean)
     );
     [...root.children]
@@ -273,7 +281,7 @@
   function shouldStartDrag(event, tile) {
     if (event.button != null && event.button !== 0) return false;
     if (event.target.closest(".board-resize, .board-reset")) return false;
-    if (event.target.closest("a, input, select, textarea, label")) return false;
+    if (event.target.closest("a, input, select, textarea, label, .gwd-steam-tabs, .gwd-steam-panel")) return false;
     if (event.target.closest("button")) return false;
     if (event.target.closest(".lib-card, .lib-grid, .lib-drop-hint, .lib-add-list, .lib-sort, .lib-tone-wrap, [data-list-del], [data-list-edit], [data-unpin], [data-list-sort], [data-list-tone], [data-set-tone]")) {
       return false;

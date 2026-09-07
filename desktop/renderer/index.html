@@ -21,7 +21,7 @@
           <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64L4.86 10.7c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.16a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54c.05.24.25.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96c.24.1.51.01.64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/>
         </svg>
       </button>
-      <button type="button" id="btnSync">Atualizar agora</button>
+      <button type="button" id="btnSync" aria-busy="false">Atualizar agora</button>
       <button type="button" class="ghost desktop-only" id="btnHide">Minimizar</button>
     </div>
   </header>
@@ -104,6 +104,7 @@
             <option value="hours">Horas</option>
             <option value="reviews">Reviews</option>
             <option value="name">Nome</option>
+            <option value="recent">Recente</option>
           </select>
         </div>
         <p class="filter-hint" id="backlogHint"></p>
@@ -140,6 +141,13 @@
         <button type="button" id="btnSteamLogin">Iniciar sessão</button>
         <button type="button" class="ghost" id="btnLogout">Sair da conta</button>
         <p class="hint account-hint">A wishlist precisa estar <b>pública</b>. gg.deals é scrape público — não precisa de conta.</p>
+      </div>
+      <div class="account-box desktop-only">
+        <p class="account-status" id="epicStatus">Epic Games: sem sessão neste app</p>
+        <button type="button" id="btnEpicLoginEgl" class="hidden">Usar o launcher da Epic</button>
+        <button type="button" id="btnEpicLogin">Entrar no site da Epic</button>
+        <button type="button" id="btnEpicLogout" class="hidden">Finalizar sessão?</button>
+        <p class="hint" id="epicHint">Sem sessão neste app, Jogos só lista o que está instalado neste PC. Se o launcher da Epic já estiver conectado, <b>Usar o launcher</b> pede só uma autorização (a senha não passa por aqui). <b>Entrar no site</b> abre a página da Epic. A loja não entrega horas de jogo.</p>
       </div>
       <div class="account-box pc-only" id="phoneLinkBox">
         <p class="account-status">Conectar celular</p>
@@ -197,7 +205,7 @@
         <button type="button" class="ghost" id="btnImportBackup">Restaurar cópia</button>
         <p class="hint" id="backupMsg"></p>
       </div>
-      <p class="hint desktop-only">Para a barra de tarefas, crie o atalho e fixe <b>Minha Loja dos Desejos</b> — não o electron.exe.</p>
+        <p class="hint desktop-only">Para a barra de tarefas, crie o atalho e fixe <b>Minha Loja dos Desejos</b> — esse atalho abre o app desta pasta. Não fixe o electron.exe.</p>
       <button type="button" class="ghost desktop-only" id="btnShortcut">Criar atalho na área de trabalho</button>
       <p class="hint desktop-only" id="shortcutMsg"></p>
       <p class="hint" id="dataPath"></p>

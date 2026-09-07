@@ -18,7 +18,7 @@ const {
   formatBRL,
   paint,
 } = require("./config");
-const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedPlaytimes, fetchMostWanted, fetchStoreHub, mapPool, isRateLimitError, isForbiddenError, capsuleUrl, detectEarlyAccess } = require("./steamApi");
+const { resolveSteamId, fetchWishlist, fetchAppDetails, fetchPriceOverview, fetchReviews, fetchOwnedPlaytimes, fetchSteamStoreLists, loadSteamTagNames, fetchStoreHub, mapPool, isRateLimitError, isForbiddenError, capsuleUrl, detectEarlyAccess } = require("./steamApi");
 const { refreshBacklog } = require("./backlog");
 const { fetchGgDealsPopular, fetchGgDealsDeals, resolveDealLists, enrichDeals } = require("./ggDeals");
 const { collectWishlistUpdates } = require("./wishlistUpdates");
@@ -244,38 +244,67 @@ async function refreshStoreSurfaces({ config, ownedIds, wishlistItems = [], onTi
   const owned = ownedIds instanceof Set ? ownedIds : new Set();
   let mostWanted = [];
   let ggPopular = [];
-  let storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [] };
+  let storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [], steamLists: {} };
   let ggScraped = false;
   const wishIds = new Set((wishlistItems || []).map((item) => Number(item.appId)));
-
-  try {
-    mostWanted = await fetchMostWanted({ country: config.country, language: config.language, limit: 20 });
-    mostWanted = mostWanted.map((game) => ({
-      ...game,
-      owned: owned.has(game.appId),
-      onWishlist: wishIds.has(Number(game.appId)),
+  const mark = (list) =>
+    (list || []).map((item) => ({
+      ...item,
+      owned: item.appId ? owned.has(item.appId) : false,
+      onWishlist: item.appId ? wishIds.has(Number(item.appId)) : false,
     }));
-    console.log(paint("cyan", `Mais visados: ${mostWanted.slice(0, 8).map((g) => g.name).join(", ")}…`));
+
+  let steamLists = { popularNew: [], topSellers: [], upcoming: [], specials: [] };
+  try {
+    const tagNames = await loadSteamTagNames(config.language);
+    const lists = await fetchSteamStoreLists({
+      country: config.country,
+      language: config.language,
+      limit: 15,
+      tagNames,
+    });
+    steamLists.popularNew = mark(lists.popularNew);
+    steamLists.topSellers = mark(lists.topSellers);
+    steamLists.upcoming = mark(lists.upcoming);
+    steamLists.specials = mark(lists.specials);
+    mostWanted = steamLists.upcoming;
+    console.log(
+      paint(
+        "cyan",
+        `Steam listas: ${steamLists.popularNew.length} lançamentos · ${steamLists.topSellers.length} vendidos · ${steamLists.upcoming.length} aguardados · ${steamLists.specials.length} ofertas`
+      )
+    );
   } catch (error) {
     const prevWanted = await readJson(paths.mostWanted, { games: [] });
+    const prevHub = await readJson(paths.storeHub, { steamLists: {} });
     mostWanted = prevWanted.games || [];
-    console.log(paint("yellow", `Mais visados indisponíveis: ${error.message}`));
+    steamLists = {
+      popularNew: prevHub.steamLists?.popularNew || [],
+      topSellers: prevHub.steamLists?.topSellers || [],
+      upcoming: prevHub.steamLists?.upcoming || mostWanted,
+      specials: prevHub.steamLists?.specials || [],
+    };
+    console.log(paint("yellow", `Listas Steam indisponíveis: ${error.message}`));
   }
   if (onTick) onTick(1);
 
   try {
-    const hub = await fetchStoreHub({ country: config.country, language: config.language });
-    const mark = (list) =>
-      (list || []).map((item) => ({
-        ...item,
-        owned: item.appId ? owned.has(item.appId) : false,
-      }));
+    const hub = await fetchStoreHub({
+      country: config.country,
+      language: config.language,
+      tagNames: await loadSteamTagNames(config.language).catch(() => undefined),
+    });
+    if (!steamLists.specials.length) {
+      const specialsList = (hub.catalog || []).slice(0, 15);
+      steamLists.specials = mark(specialsList.length ? specialsList : hub.specials);
+    }
     storeHub = {
       events: hub.events || [],
       specials: mark(hub.specials),
       newDeals: [],
       bestDeals: [],
       dealsStrip: mark(hub.dealsStrip),
+      steamLists,
     };
     console.log(
       paint("cyan", `Steam hub: ${storeHub.events.length} eventos · ${storeHub.dealsStrip.length} na faixa de descontos`)
@@ -285,6 +314,7 @@ async function refreshStoreSurfaces({ config, ownedIds, wishlistItems = [], onTi
       events: [],
       specials: [],
       dealsStrip: [],
+      steamLists: {},
     });
     storeHub = {
       events: prevHub.events || [],
@@ -292,6 +322,7 @@ async function refreshStoreSurfaces({ config, ownedIds, wishlistItems = [], onTi
       newDeals: [],
       bestDeals: [],
       dealsStrip: prevHub.dealsStrip || [],
+      steamLists,
     };
     console.log(paint("yellow", `Destaques Steam indisponíveis: ${error.message}`));
   }
@@ -585,6 +616,7 @@ async function main(options = {}) {
       previousWishlist: previousWish.games || [],
       timezone: config.timezone,
       language: config.language,
+      country: config.country,
       refreshNews: false,
       onProgress: (p) => progress.tick("noticias", p.current, p.total),
     });
@@ -981,6 +1013,7 @@ async function main(options = {}) {
     previousWishlist: savedWishlist.games || [],
     timezone: config.timezone,
     language: config.language,
+    country: config.country,
     refreshNews: true,
     onProgress: (p) => progress.tick("noticias", p.current, p.total),
   });

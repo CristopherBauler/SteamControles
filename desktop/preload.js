@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("steamApp", {
   getState: () => ipcRenderer.invoke("get-state"),
   saveSettings: (partial) => ipcRenderer.invoke("save-settings", partial),
   login: () => ipcRenderer.invoke("steam-login"),
+  epicLogin: (opts) => ipcRenderer.invoke("epic-login", opts || {}),
+  epicLogout: () => ipcRenderer.invoke("epic-logout"),
   logout: () => ipcRenderer.invoke("logout"),
   sync: () => ipcRenderer.invoke("sync-now"),
   createShortcuts: () => ipcRenderer.invoke("create-shortcuts"),

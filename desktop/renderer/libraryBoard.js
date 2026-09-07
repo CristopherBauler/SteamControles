@@ -10,9 +10,10 @@
     { id: "h20", title: "20 a 50 h", extra: "bem avançados", tone: "green", auto: "h20" },
     { id: "h10", title: "10 a 20 h", extra: "em andamento", tone: "green", auto: "h10" },
     { id: "h1", title: "Menos de 10 h", extra: "só comecei", tone: "red", auto: "h1" },
+    { id: "epic", title: "Epic Games", extra: "biblioteca da conta (entre na Epic se faltar jogo)", tone: "blue", auto: "epic" },
     { id: "never", title: "Nunca jogado", extra: "zero horas neste PC", tone: "red", auto: "never" },
   ];
-  const SORTS = ["hours", "reviews", "name"];
+  const SORTS = ["hours", "reviews", "name", "recent"];
   const TONES = [
     { id: "green", label: "Verde" },
     { id: "red", label: "Vermelho" },
@@ -134,9 +135,11 @@
     }
   }
 
-  function autoId(hours) {
-    const h = Number(hours) || 0;
+  function autoId(game) {
+    if (game?.store === "epic") return "epic";
+    const h = Number(game?.hours) || 0;
     for (const def of DEFAULT_LISTS) {
+      if (def.auto === "epic") continue;
       if (AUTO_TEST[def.auto]?.(h)) return def.auto;
     }
     return "never";
@@ -149,6 +152,11 @@
   function reviewPercent(game) {
     const n = Number(game?.reviewPercent);
     return Number.isFinite(n) ? n : -1;
+  }
+
+  function recentMs(game) {
+    const t = Date.parse(game?.skippedAt || game?.addedAt || "");
+    return Number.isFinite(t) ? t : 0;
   }
 
   function sortItems(items, sort) {
@@ -165,6 +173,10 @@
         if (tb !== ta) return tb - ta;
         return NAME_COLLATOR.compare(a.name || "", b.name || "");
       });
+    } else if (sort === "recent") {
+      list.sort(
+        (a, b) => recentMs(b) - recentMs(a) || NAME_COLLATOR.compare(a.name || "", b.name || "") || Number(a.appId) - Number(b.appId)
+      );
     } else {
       list.sort((a, b) => hoursOf(b) - hoursOf(a) || NAME_COLLATOR.compare(a.name || "", b.name || ""));
     }
@@ -177,7 +189,7 @@
     for (const game of games || []) {
       const pin = data.pins[String(game.appId)];
       if (pin && data.lists.some((list) => list.id === pin)) continue;
-      needed.add(autoId(hoursOf(game)));
+      needed.add(autoId(game));
     }
     let changed = false;
     DEFAULT_LISTS.forEach((def, idx) => {
@@ -219,7 +231,7 @@
         buckets[pin].push(game);
         continue;
       }
-      const home = lists.find((list) => list.auto && list.auto === autoId(hoursOf(game)));
+      const home = lists.find((list) => list.auto && list.auto === autoId(game));
       if (home && buckets[home.id]) buckets[home.id].push(game);
       else if (buckets.outros) buckets.outros.push(game);
     }
@@ -237,7 +249,7 @@
     return (games || []).some((game) => {
       const pin = data.pins[String(game.appId)];
       if (pin && lists.some((list) => list.id === pin)) return false;
-      return !lists.some((list) => list.auto && list.auto === autoId(hoursOf(game)));
+      return !lists.some((list) => list.auto && list.auto === autoId(game));
     });
   }
 

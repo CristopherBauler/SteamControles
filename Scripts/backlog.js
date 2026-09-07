@@ -5,8 +5,9 @@
 
 const fs = require("fs/promises");
 const path = require("path");
-const { readJson, writeJson, nowIso } = require("./config");
+const { readJson, writeJson, nowIso, CONFIG_PATH } = require("./config");
 const { fetchOwnedPlaytimes, fetchAppDetails, fetchReviews, mapPool } = require("./steamApi");
+const { fetchEpicOwned, isEpicGame, probeEglSession, isEpicPlaceholderName, epicCoverFallbacks } = require("./epicApi");
 
 const NAME_RESOLVE_LIMIT = 15;
 const REVIEW_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -37,7 +38,18 @@ function isBareName(name) {
   return /^App \d+$/i.test(String(name || "").trim());
 }
 
+function isPlaceholderName(name, game) {
+  if (isBareName(name)) return true;
+  if ((isEpicGame(game) || isEpicGame({ appId: game?.appId })) && isEpicPlaceholderName(name)) return true;
+  return false;
+}
+
 function isJunkGame(game) {
+  if (isEpicGame(game)) {
+    return /unreal engine|^ue[_\s.-]?\d|epic online services|twinmotion|metahuman|quixel|^bridge\b/i.test(
+      String(game.name || "")
+    );
+  }
   if (SKIP_APP_IDS.has(Number(game.appId))) return true;
   const appType = String(game.appType || "").toLowerCase();
   if (SKIP_TYPES.has(appType)) return true;
@@ -74,6 +86,11 @@ function familyHtml(game) {
   return ` <span class="gwd-bl-family" style="color:#c9a227;font-weight:600">Família</span>`;
 }
 
+function epicHtml(game) {
+  if (!isEpicGame(game)) return "";
+  return ` <span class="gwd-bl-epic" style="color:#32c5f4;font-weight:600">Epic</span>`;
+}
+
 function isCommunityLogo(url) {
   return /(?:steamcommunity\.com|media\.steampowered\.com)\/(?:public\/)?images\/apps\/\d+\//i.test(
     String(url || "")
@@ -99,7 +116,7 @@ function coverCandidates(game, cached) {
   push(game?.coverUrl);
   push(game?.capsuleImage);
   push(game?.headerImage);
-  if (Number.isInteger(id) && id > 0) {
+  if (!isEpicGame(game) && Number.isInteger(id) && id > 0) {
     push(defaultCapsule(id));
     push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`);
     push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`);
@@ -109,6 +126,14 @@ function coverCandidates(game, cached) {
     push(`https://media.steampowered.com/steamcommunity/public/images/apps/${id}/${game.logoHash}.jpg`);
   }
   if (isCommunityLogo(game?.logo)) push(game.logo);
+  if (isEpicGame(game)) {
+    for (const url of epicCoverFallbacks({
+      namespace: game.epicNamespace || game.namespace,
+      catalogItemId: game.epicId || game.catalogItemId,
+    })) {
+      push(url);
+    }
+  }
   return [...new Set(list.filter(Boolean))];
 }
 
@@ -182,6 +207,19 @@ async function resolveCovers(games, cachePath, config = {}, options = {}) {
       return;
     }
     try {
+      if (isEpicGame(game)) {
+        for (const candidate of coverCandidates(game, urls[id])) {
+          if (await headOk(candidate)) {
+            game.cover = candidate;
+            game.coverUrl = candidate;
+            urls[id] = candidate;
+            return;
+          }
+        }
+        game.cover = game.cover && !isBannedCover(game.cover) ? game.cover : "";
+        if (!urls[id]) urls[id] = game.cover || "";
+        return;
+      }
       const details = await fetchAppDetails(Number(game.appId), {
         country: config.country || "br",
         language: config.language || "portuguese",
@@ -349,6 +387,11 @@ function snapshotGame(game) {
     playtimeMinutes: Number(game.playtimeMinutes || Math.round(gameHours(game) * 60)),
     appType: game.appType || "",
     family: Boolean(game.family),
+    skippedAt: game.skippedAt || "",
+    store: isEpicGame(game) ? "epic" : game.store || "steam",
+    storeUrl: game.storeUrl || "",
+    epicId: game.epicId || "",
+    epicNamespace: game.epicNamespace || game.namespace || "",
   };
 }
 
@@ -380,6 +423,11 @@ function normalizeTracked(item, appId) {
     appType: item?.appType || "",
     cover: item?.cover || item?.coverUrl || "",
     family: Boolean(item?.family),
+    skippedAt: item?.skippedAt || "",
+    store: isEpicGame(item) || isEpicGame({ appId }) ? "epic" : item?.store || "steam",
+    storeUrl: item?.storeUrl || "",
+    epicId: item?.epicId || "",
+    epicNamespace: item?.epicNamespace || item?.namespace || "",
   };
 }
 
@@ -409,7 +457,7 @@ function upsertTracked(map, game) {
   const hours = game.hours != null && Number.isFinite(Number(game.hours)) ? Number(game.hours) : gameHours(game);
   const existing = map[appId];
   if (existing) {
-    if (game.name && !isBareName(game.name)) existing.name = game.name;
+    if (game.name && !isPlaceholderName(game.name, game)) existing.name = game.name;
     if (Number.isFinite(hours)) {
       existing.hours = hours;
       existing.playtimeMinutes = Math.round(hours * 60);
@@ -421,6 +469,11 @@ function upsertTracked(map, game) {
     }
     if (game.family) existing.family = true;
     if (game.family === false && existing.hours > 0) existing.family = false;
+    if (game.skippedAt) existing.skippedAt = game.skippedAt;
+    if (isEpicGame(game)) existing.store = "epic";
+    if (game.storeUrl) existing.storeUrl = game.storeUrl;
+    if (game.epicId) existing.epicId = game.epicId;
+    if (game.epicNamespace || game.namespace) existing.epicNamespace = game.epicNamespace || game.namespace;
     return;
   }
   map[appId] = normalizeTracked(
@@ -435,6 +488,10 @@ function upsertTracked(map, game) {
       logo: game.logo || "",
       appType: game.appType || "",
       family: Boolean(game.family),
+      skippedAt: game.skippedAt || "",
+      store: isEpicGame(game) ? "epic" : game.store || "steam",
+      storeUrl: game.storeUrl || "",
+      epicId: game.epicId || "",
     },
     appId
   );
@@ -461,7 +518,20 @@ async function loadAndMergeTracked(paths, ownedGames, doneSnapshots) {
       continue;
     }
     if (isJunkGame(game)) continue;
+    if (isEpicGame(game) && isEpicPlaceholderName(game.name)) continue;
     upsertTracked(map, game);
+  }
+
+  const epicLib = await readJson(paths.epicLibrary, { games: [] });
+  const epicRealIds = new Set();
+  for (const game of epicLib.games || []) {
+    if (isJunkGame(game) || isEpicPlaceholderName(game.name)) continue;
+    epicRealIds.add(Number(game.appId));
+    upsertTracked(map, game);
+  }
+  for (const [appId, game] of Object.entries(map)) {
+    if (!isEpicGame(game) || !isEpicPlaceholderName(game.name)) continue;
+    if (!epicRealIds.has(Number(appId))) delete map[appId];
   }
 
   return map;
@@ -478,6 +548,14 @@ async function saveTracked(paths, map) {
       firstHours: game.firstHours,
       hours: game.hours,
       ...(game.family ? { family: true } : {}),
+      ...(isEpicGame(game)
+        ? {
+            store: "epic",
+            storeUrl: game.storeUrl || "",
+            epicId: game.epicId || "",
+            ...(game.epicNamespace ? { epicNamespace: game.epicNamespace } : {}),
+          }
+        : {}),
     };
   }
   await writeJson(paths.backlogTracked, {
@@ -521,7 +599,7 @@ function taskRow(game, checked) {
   const art = src
     ? `<img src="${esc(src)}" alt="">`
     : `<span class="gbd-cover-empty" aria-hidden="true"></span>`;
-  return `- [${mark}] ${art} <strong>${name}</strong> ${hoursHtml(gameHours(game))}${familyHtml(game)} <!--app:${Number(game.appId)}-->`;
+  return `- [${mark}] ${art} <strong>${name}</strong> ${hoursHtml(gameHours(game))}${familyHtml(game)}${epicHtml(game)} <!--app:${Number(game.appId)}-->`;
 }
 
 function backlogTaskRow(game) {
@@ -531,7 +609,7 @@ function backlogTaskRow(game) {
   const style = src
     ? ` style="background-image:url('${safe}');background-size:132px 50px;background-repeat:no-repeat;background-position:left center;padding-left:142px"`
     : "";
-  return `- [ ] <span class="gbd-item"${style}><strong>${name}</strong> ${hoursHtml(gameHours(game))}${familyHtml(game)}</span> <!--app:${Number(game.appId)}-->`;
+  return `- [ ] <span class="gbd-item"${style}><strong>${name}</strong> ${hoursHtml(gameHours(game))}${familyHtml(game)}${epicHtml(game)}</span> <!--app:${Number(game.appId)}-->`;
 }
 
 function privacyMessage(payload) {
@@ -557,21 +635,29 @@ function sourceHint(payload) {
   if (payload?.familyCount) bits.push(`${payload.familyCount} da família`);
   else if (payload?.familyFound) bits.push("grupo família no PC");
   if (payload?.cacheExtra) bits.push(`+${payload.cacheExtra} do cache local`);
+  if (payload?.epicCount) {
+    bits.push(
+      payload.epicSource === "epic-library"
+        ? `${payload.epicCount} da Epic`
+        : `${payload.epicCount} da Epic (só instalados)`
+    );
+  }
   return bits.join(" · ");
 }
 
 const HOUR_SHELVES = [
-  { key: "h100", tone: "green", title: "Mais de 100 h", extra: "os que mais te consumiram", test: (h) => h >= 100 },
-  { key: "h50", tone: "green", title: "50 a 100 h", extra: "já virou hábito", test: (h) => h >= 50 && h < 100 },
-  { key: "h20", tone: "green", title: "20 a 50 h", extra: "bem avançados", test: (h) => h >= 20 && h < 50 },
-  { key: "h10", tone: "green", title: "10 a 20 h", extra: "em andamento", test: (h) => h >= 10 && h < 20 },
-  { key: "h1", tone: "red", title: "Menos de 10 h", extra: "só comecei", test: (h) => h > 0 && h < 10 },
-  { key: "never", tone: "red", title: "Nunca jogado", extra: "zero horas neste PC", test: (h) => h <= 0 },
+  { key: "h100", tone: "green", title: "Mais de 100 h", extra: "os que mais te consumiram", test: (h, game) => game?.store !== "epic" && h >= 100 },
+  { key: "h50", tone: "green", title: "50 a 100 h", extra: "já virou hábito", test: (h, game) => game?.store !== "epic" && h >= 50 && h < 100 },
+  { key: "h20", tone: "green", title: "20 a 50 h", extra: "bem avançados", test: (h, game) => game?.store !== "epic" && h >= 20 && h < 50 },
+  { key: "h10", tone: "green", title: "10 a 20 h", extra: "em andamento", test: (h, game) => game?.store !== "epic" && h >= 10 && h < 20 },
+  { key: "h1", tone: "red", title: "Menos de 10 h", extra: "só comecei", test: (h, game) => game?.store !== "epic" && h > 0 && h < 10 },
+  { key: "epic", tone: "blue", title: "Epic Games", extra: "biblioteca da conta (entre na Epic se faltar jogo)", test: (_h, game) => game?.store === "epic" },
+  { key: "never", tone: "red", title: "Nunca jogado", extra: "zero horas neste PC", test: (h, game) => game?.store !== "epic" && h <= 0 },
 ];
 
 function groupByHours(games) {
   return HOUR_SHELVES.map((def) => {
-    const items = games.filter((game) => def.test(gameHours(game)));
+    const items = games.filter((game) => def.test(gameHours(game), game));
     const hours = items.reduce((sum, game) => sum + gameHours(game), 0);
     return { ...def, items, hours };
   }).filter((shelf) => shelf.items.length);
@@ -711,11 +797,16 @@ async function writeNoteCopies(files, markdown) {
 }
 
 async function saveDoneState(paths, doneGames) {
+  const previous = await readJson(paths.backlogDone, { appIds: [], games: {} });
+  const prevGames = previous.games && typeof previous.games === "object" ? previous.games : {};
   const games = {};
   const appIds = [];
   for (const game of doneGames) {
     appIds.push(game.appId);
-    games[String(game.appId)] = snapshotGame(game);
+    const snap = snapshotGame(game);
+    const prev = prevGames[String(game.appId)] || {};
+    snap.skippedAt = game.skippedAt || prev.skippedAt || "";
+    games[String(game.appId)] = snap;
   }
   await writeJson(paths.backlogDone, {
     updatedAt: nowIso(),
@@ -743,7 +834,7 @@ async function resolveMissingNames(games, config, cachePath) {
       }
   }
 
-  const missing = sortByHoursDesc(games.filter((game) => isBareName(game.name)));
+  const missing = sortByHoursDesc(games.filter((game) => !isEpicGame(game) && isBareName(game.name)));
   for (const game of missing) {
     if (resolved >= NAME_RESOLVE_LIMIT) break;
     try {
@@ -833,7 +924,27 @@ async function refreshBacklog({
     config,
     nameCache
   );
-  const tracked = await loadAndMergeTracked(paths, catalog, snapshots);
+  let epic = { games: [], count: 0, source: "none", refreshToken: "", displayName: "", accountId: "", error: "" };
+  try {
+    epic = await fetchEpicOwned(config);
+  } catch {
+    epic = await readJson(paths.epicLibrary, { games: [] });
+  }
+  if (epic.refreshToken && epic.refreshToken !== config.epicRefreshToken) {
+    try {
+      const raw = await readJson(CONFIG_PATH, {});
+      raw.epicRefreshToken = epic.refreshToken;
+      if (epic.displayName) raw.epicDisplayName = epic.displayName;
+      if (epic.accountId) raw.epicAccountId = epic.accountId;
+      await writeJson(CONFIG_PATH, raw);
+    } catch {
+      // token rotacionado fica para o próximo save dos Ajustes
+    }
+  }
+  payload.epicCount = (epic.games || []).length;
+  payload.epicSource = epic.source || "none";
+  payload.epicError = epic.error || "";
+  const tracked = await loadAndMergeTracked(paths, [...catalog, ...(epic.games || [])], snapshots);
   await saveTracked(paths, tracked);
   const { open, done } = splitTracked(tracked, doneIds);
   const coverGames = [...open, ...done];
@@ -888,6 +999,7 @@ async function fillLibraryReviews(config, games, options = {}) {
   if (!cache.games || typeof cache.games !== "object") cache.games = {};
   const now = Date.now();
   const stale = (games || []).filter((game) => {
+    if (isEpicGame(game)) return false;
     const id = Number(game?.appId);
     if (!Number.isInteger(id) || id <= 0) return false;
     const hit = cache.games[String(id)];
@@ -924,6 +1036,7 @@ async function fillLibraryReviews(config, games, options = {}) {
 function publicGame(game) {
   const id = Number(game.appId);
   const covers = coverCandidates(game, coverUrl(game));
+  const epic = isEpicGame(game);
   return {
     appId: id,
     name: game.name || `App ${id}`,
@@ -931,19 +1044,41 @@ function publicGame(game) {
     covers,
     hours: gameHours(game),
     family: Boolean(game.family),
-    storeUrl: `https://store.steampowered.com/app/${id}`,
+    store: epic ? "epic" : "steam",
+    storeUrl: game.storeUrl || (epic ? "https://store.epicgames.com/pt-BR/" : `https://store.steampowered.com/app/${id}`),
     reviewPercent: game.reviewPercent != null && Number.isFinite(Number(game.reviewPercent)) ? Number(game.reviewPercent) : null,
     reviewTotal: Number(game.reviewTotal) || 0,
+    skippedAt: game.skippedAt || "",
+    addedAt: game.addedAt || "",
   };
 }
 
 async function loadLibraryLists(config) {
   const { paths } = config;
-  const tracked = readTrackedMap(await readJson(paths.backlogTracked, { games: {} }));
   const { doneIds, snapshots } = await loadDoneState(paths);
-  for (const snap of Object.values(snapshots || {})) {
-    if (snap?.appId) upsertTracked(tracked, snap);
+  const previous = readTrackedMap(await readJson(paths.backlogTracked, { games: {} }));
+  const tracked = await loadAndMergeTracked(paths, [], snapshots);
+  const epicChanged = Object.values(tracked).some((game) => {
+    if (!isEpicGame(game)) return false;
+    const prev = previous[game.appId];
+    if (!prev) return true;
+    if (game.name && game.name !== prev.name) return true;
+    const cover = game.cover || game.coverUrl || "";
+    const prevCover = prev.cover || prev.coverUrl || "";
+    return Boolean(cover && cover !== prevCover);
+  });
+  if (epicChanged) {
+    await saveTracked(paths, tracked);
   }
+  const payload = await readJson(paths.ownedPlaytimes, {
+    games: [],
+    source: "none",
+    communityPrivate: true,
+  });
+  const epicLib = await readJson(paths.epicLibrary, { games: [] });
+  payload.epicCount = Array.isArray(epicLib.games) ? epicLib.games.length : Number(epicLib.count || 0);
+  payload.epicSource = epicLib.source || payload.epicSource || "none";
+  payload.epicError = epicLib.error || payload.epicError || "";
   const { open, done } = splitTracked(tracked, doneIds);
   const coverPath = path.join(paths.data, "backlogCovers.json");
   const all = [...open, ...done];
@@ -954,11 +1089,7 @@ async function loadLibraryLists(config) {
     attachCachedCovers(all, readCoverMap(await readJson(coverPath, {})));
   }
   attachReviews(all, await readJson(paths.libraryReviews, { games: {} }));
-  const payload = await readJson(paths.ownedPlaytimes, {
-    games: [],
-    source: "none",
-    communityPrivate: true,
-  });
+  const egl = probeEglSession();
   return {
     open: open.map(publicGame),
     done: done.map(publicGame),
@@ -968,6 +1099,14 @@ async function loadLibraryLists(config) {
       familyCount: Number(payload.familyCount || 0),
       hint: privacyMessage(payload).replace(/\*\*/g, ""),
       sourceHint: sourceHint(payload),
+      epicSource: payload.epicSource || "none",
+      epicCount: Number(payload.epicCount) || 0,
+      epicError: payload.epicError || "",
+      needsEpicLogin: (payload.epicSource || "none") !== "epic-library",
+      epicLoggedIn: Boolean(config.epicRefreshToken),
+      epicAccountName: String(config.epicDisplayName || "").trim(),
+      hasEglSession: Boolean(egl.available),
+      eglDisplayName: egl.displayName || "",
     },
   };
 }
@@ -983,6 +1122,10 @@ async function toggleSkipped(config, appId, skipped) {
   else doneIds.delete(id);
   const tracked = await loadAndMergeTracked(paths, [], snapshots);
   const { open, done } = splitTracked(tracked, doneIds);
+  if (skipped) {
+    const row = done.find((game) => Number(game.appId) === id);
+    if (row) row.skippedAt = nowIso();
+  }
   attachCachedCovers(
     [...open, ...done],
     readCoverMap(await readJson(path.join(paths.data, "backlogCovers.json"), {}))

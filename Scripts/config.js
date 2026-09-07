@@ -34,7 +34,10 @@ const DEFAULT_CONFIG = {
   projectFolder: "",
   requestDelayMs: 1000,
   itadApiKey: "",
-  steamWebApiKey: "",
+    steamWebApiKey: "",
+    epicRefreshToken: "",
+    epicAccountId: "",
+    epicDisplayName: "",
   syncEveryHours: 12,
   startWithWindows: true,
   notifySales: true,
@@ -44,6 +47,12 @@ const DEFAULT_CONFIG = {
   libraryLists: { lists: [], pins: {} },
   backlogSort: "hours",
 };
+
+const BACKLOG_SORTS = ["hours", "reviews", "name", "recent"];
+
+function normalizeBacklogSort(value) {
+  return BACKLOG_SORTS.includes(value) ? value : "hours";
+}
 
 function normalizeHex(value, fallback) {
   const raw = String(value || "").trim();
@@ -109,6 +118,9 @@ async function loadConfig() {
     requestDelayMs: Number(config.requestDelayMs) > 0 ? Number(config.requestDelayMs) : 1000,
     itadApiKey: String(config.itadApiKey || "").trim(),
     steamWebApiKey: String(config.steamWebApiKey || "").trim(),
+    epicRefreshToken: String(config.epicRefreshToken || "").trim(),
+    epicAccountId: String(config.epicAccountId || "").trim(),
+    epicDisplayName: String(config.epicDisplayName || "").trim(),
     syncEveryHours: Number(config.syncEveryHours) > 0 ? Number(config.syncEveryHours) : 12,
     startWithWindows: config.startWithWindows !== false,
     notifySales: config.notifySales !== false,
@@ -119,7 +131,7 @@ async function loadConfig() {
       config.libraryLists && typeof config.libraryLists === "object" && !Array.isArray(config.libraryLists)
         ? config.libraryLists
         : { lists: [], pins: {} },
-    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
+    backlogSort: normalizeBacklogSort(config.backlogSort),
     paths: {
       root: base,
       config: CONFIG_PATH,
@@ -140,6 +152,7 @@ async function loadConfig() {
       backlogDone: path.join(base, "Data", "backlogDone.json"),
       backlogTracked: path.join(base, "Data", "backlogTracked.json"),
       libraryReviews: path.join(base, "Data", "libraryReviews.json"),
+      epicLibrary: path.join(base, "Data", "epicLibrary.json"),
       dashboardNote: path.join(base, "Dashboard", "Steam Wishlist Dashboard.md"),
       backlogNote: path.join(base, "Dashboard", "Backlog Steam.md"),
       skippedNote: path.join(base, "Dashboard", "Não vou jogar.md"),
@@ -202,6 +215,8 @@ module.exports = {
   CONFIG_PATH,
   DEFAULT_CONFIG,
   DEFAULT_THEME,
+  BACKLOG_SORTS,
+  normalizeBacklogSort,
   normalizeTheme,
   loadConfig,
   readJson,

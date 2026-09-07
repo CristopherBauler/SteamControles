@@ -4,12 +4,119 @@
  * o mesmo feed "What's New" da biblioteca, só para jogos da lista de desejos.
  */
 
-const { readJson, writeJson, nowIso, formatBRL, roundMoney } = require("./config");
-const { fetchPartnerEvents, fetchAppNews, partnerEventImage, mapPool, isRateLimitError, detectEarlyAccess } = require("./steamApi");
+const path = require("path");
+const { readJson, writeJson, nowIso, formatBRL, roundMoney, sleep } = require("./config");
+const { fetchPartnerEvents, fetchAppNews, partnerEventImage, mapPool, isRateLimitError, detectEarlyAccess, fetchAppDetails } = require("./steamApi");
 
 const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const NEWS_STALE_MS = 4 * 60 * 60 * 1000;
 const NEWS_CONCURRENCY = 5;
+const NAME_RESOLVE_LIMIT = 40;
+
+function isBareName(name) {
+  return /^App \d+$/i.test(String(name || "").trim());
+}
+
+function nameFromCache(names, appId) {
+  const hit = names?.[String(appId)];
+  const value = typeof hit === "string" ? hit : hit?.name;
+  if (value && !isBareName(value)) return value;
+  return "";
+}
+
+function applyName(row, name) {
+  if (!row || !name || isBareName(name)) return row;
+  const next = { ...row, name };
+  if (!next.title || isBareName(next.title)) next.title = name;
+  return next;
+}
+
+function nameMapFromSources(cache = {}, extraGames = []) {
+  const map = {};
+  const names = cache.names && typeof cache.names === "object" ? cache.names : cache;
+  for (const [id, hit] of Object.entries(names || {})) {
+    const value = nameFromCache({ [id]: hit }, id);
+    if (value) map[String(id)] = value;
+  }
+  for (const game of extraGames || []) {
+    const id = String(game?.appId ?? "");
+    if (!id || !game?.name || isBareName(game.name)) continue;
+    map[id] = game.name;
+  }
+  return map;
+}
+
+function decorateUpdateNames(events, nameMap) {
+  return (events || []).map((event) => {
+    const known = nameMap[String(event.appId)] || "";
+    if (!known) return event;
+    return applyName(event, known);
+  });
+}
+
+async function loadNameCache(paths) {
+  const file = path.join(paths.data, "appNames.json");
+  const cache = await readJson(file, { names: {} });
+  if (!cache.names || typeof cache.names !== "object") cache.names = {};
+  return { file, cache };
+}
+
+async function persistWishlistNames(paths, nameMap) {
+  if (!paths?.wishlist || !nameMap) return;
+  const wish = await readJson(paths.wishlist, { games: [] });
+  let changed = false;
+  for (const game of wish.games || []) {
+    const known = nameMap[String(game.appId)];
+    if (!known || !isBareName(game.name)) continue;
+    game.name = known;
+    changed = true;
+  }
+  if (changed) await writeJson(paths.wishlist, wish);
+}
+
+async function resolveUpdateNames(events, {
+  paths,
+  country = "br",
+  language = "portuguese",
+  extraGames = [],
+} = {}) {
+  if (!paths?.data) {
+    return { events: events || [], nameMap: nameMapFromSources({}, extraGames), fetched: 0 };
+  }
+  const { file, cache } = await loadNameCache(paths);
+  const nameMap = nameMapFromSources(cache, extraGames);
+  let decorated = decorateUpdateNames(events, nameMap);
+  const missing = [...new Set(
+    [
+      ...(decorated || []).filter((event) => isBareName(event.name)).map((event) => Number(event.appId)),
+      ...(extraGames || []).filter((game) => isBareName(game.name)).map((game) => Number(game.appId)),
+    ].filter((id) => Number.isInteger(id) && id > 0 && !nameMap[String(id)])
+  )];
+  let fetched = 0;
+  for (const appId of missing) {
+    if (fetched >= NAME_RESOLVE_LIMIT) break;
+    try {
+      const details = await fetchAppDetails(appId, {
+        country,
+        language,
+        retries: 1,
+        timeoutMs: 8000,
+      });
+      fetched += 1;
+      if (details?.name && !details.unavailable && !isBareName(details.name)) {
+        nameMap[String(appId)] = details.name;
+        cache.names[String(appId)] = { ...(cache.names[String(appId)] || {}), name: details.name };
+      }
+      await sleep(200);
+    } catch {
+      break;
+    }
+  }
+  if (fetched) await writeJson(file, { updatedAt: nowIso(), names: cache.names });
+  decorated = decorateUpdateNames(events, nameMap);
+  await persistWishlistNames(paths, nameMap);
+  return { events: decorated, nameMap, fetched };
+}
 
 const KIND_ORDER = {
   launch: 0,
@@ -264,9 +371,20 @@ async function collectWishlistUpdates({
   previousWishlist = [],
   timezone = "America/Sao_Paulo",
   language = "brazilian",
+  country = "br",
   refreshNews = false,
   onProgress,
 } = {}) {
+  const named = await resolveUpdateNames([], {
+    paths,
+    country,
+    language,
+    extraGames: [...(games || []), ...(previousWishlist || [])],
+  });
+  for (const game of games || []) {
+    const known = named.nameMap[String(game.appId)];
+    if (known && isBareName(game.name)) game.name = known;
+  }
   const stored = await readJson(paths.wishlistUpdates, { events: [], lastSeen: {} });
   const lastSeen = stored.lastSeen && typeof stored.lastSeen === "object" ? stored.lastSeen : {};
   const wishMap = new Map();
@@ -283,6 +401,8 @@ async function collectWishlistUpdates({
     if (game.onWishlist === false) continue;
     const curr = toSnapshot(game);
     if (!curr) continue;
+    const knownName = named.nameMap[String(curr.appId)];
+    if (knownName) curr.name = knownName;
     const prev = lastSeen[String(curr.appId)] || wishMap.get(curr.appId) || null;
     if (curr.comingSoon == null && prev?.comingSoon != null) curr.comingSoon = prev.comingSoon;
     if (!curr.releaseDate && prev?.releaseDate) curr.releaseDate = prev.releaseDate;
@@ -371,15 +491,27 @@ async function collectWishlistUpdates({
     timezone,
   }));
 
+  const labeled = await resolveUpdateNames(ranked, {
+    paths,
+    country,
+    language,
+    extraGames: games,
+  });
+  const eventsOut = labeled.events;
+  for (const snap of Object.values(nextSeen)) {
+    const known = labeled.nameMap[String(snap.appId)];
+    if (known) snap.name = known;
+  }
+
   const payload = {
     updatedAt: nowIso(),
     newsFetchedAt: news.skipped ? stored.newsFetchedAt || nowIso() : nowIso(),
-    events: ranked,
+    events: eventsOut,
     lastSeen: nextSeen,
   };
   await writeJson(paths.wishlistUpdates, payload);
   return {
-    events: ranked,
+    events: eventsOut,
     freshCount: fresh.length,
     newsCount: news.events.length,
     newsSkipped: news.skipped,
@@ -389,4 +521,7 @@ async function collectWishlistUpdates({
 
 module.exports = {
   collectWishlistUpdates,
+  decorateUpdateNames,
+  resolveUpdateNames,
+  isBareName,
 };

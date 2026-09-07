@@ -388,15 +388,90 @@ function wishSearchBlock() {
   ].join("\n");
 }
 
+function steamPriceBlock(game) {
+  if (game?.isFree || game?.currentPrice === 0 || /^grátis$|^free$/i.test(game?.priceLabel || "")) {
+    return `<div class="gwd-steam-cost"><span class="gwd-steam-free">Grátis</span></div>`;
+  }
+  const disc = Number(game?.discount) || 0;
+  const current =
+    game?.priceLabel && !disc
+      ? esc(game.priceLabel)
+      : game?.currentPrice != null
+        ? esc(formatBRL(game.currentPrice))
+        : game?.priceLabel
+          ? esc(game.priceLabel)
+          : "—";
+  const original =
+    disc > 0
+      ? game.originalPriceLabel
+        ? esc(game.originalPriceLabel)
+        : game.originalPrice != null
+          ? esc(formatBRL(game.originalPrice))
+          : ""
+      : "";
+  return `<div class="gwd-steam-cost">
+    ${disc > 0 ? `<span class="gwd-steam-pct">-${esc(disc)}%</span>` : ""}
+    ${original ? `<span class="gwd-steam-was">${original}</span>` : ""}
+    <span class="gwd-steam-now">${current}</span>
+  </div>`;
+}
+
+function steamListRow(game) {
+  const img = cover(game);
+  const art = img ? `<img src="${esc(img)}" alt="">` : `<div class="gwd-card-ph"></div>`;
+  const tags = (game.tags || []).filter(Boolean).slice(0, 3).join(", ");
+  const date = String(game.releaseDate || "").trim();
+  const wish = game.onWishlist
+    ? `<span class="gwd-wish-ribbon">★ NA LISTA DE DESEJOS</span>`
+    : "";
+  return `<a class="gwd-steam-row" href="${esc(game.storeUrl || "#")}">
+    <div class="gwd-steam-art">${art}${wish}</div>
+    <div class="gwd-steam-body">
+      <div class="gwd-steam-name">${check(game.owned)}${esc(game.name)}</div>
+      ${tags ? `<div class="gwd-steam-tags">${esc(tags)}</div>` : ""}
+      ${date ? `<div class="gwd-steam-date">Lançamento: ${esc(date)}</div>` : ""}
+    </div>
+    ${steamPriceBlock(game)}
+  </a>`;
+}
+
+function steamListPanel(id, games) {
+  const rows = (games || []).map(steamListRow).join("");
+  return `<div class="gwd-steam-panel" data-panel="${esc(id)}">${
+    rows || `<div class="gwd-empty">Nada nesta lista agora. Clique em Atualizar agora.</div>`
+  }</div>`;
+}
+
+function steamChartsHtml(storeHub, mostWanted) {
+  const lists = storeHub?.steamLists || {};
+  const popularNew = lists.popularNew || [];
+  const topSellers = lists.topSellers || [];
+  const upcoming = lists.upcoming || mostWanted || [];
+  const specials = lists.specials || storeHub?.specials || [];
+  return `<div class="gwd-steam">
+    <input class="gwd-steam-radio" type="radio" name="gwdSteamTab" id="gwdSteamPopularnew" checked>
+    <input class="gwd-steam-radio" type="radio" name="gwdSteamTab" id="gwdSteamTopsellers">
+    <input class="gwd-steam-radio" type="radio" name="gwdSteamTab" id="gwdSteamUpcoming">
+    <input class="gwd-steam-radio" type="radio" name="gwdSteamTab" id="gwdSteamSpecials">
+    <div class="gwd-steam-tabs" role="tablist">
+      <label class="gwd-steam-tab" for="gwdSteamPopularnew">Lançamentos populares</label>
+      <label class="gwd-steam-tab" for="gwdSteamTopsellers">Mais vendidos</label>
+      <label class="gwd-steam-tab" for="gwdSteamUpcoming">Mais aguardados</label>
+      <label class="gwd-steam-tab" for="gwdSteamSpecials">Ofertas</label>
+    </div>
+    ${steamListPanel("popularnew", popularNew)}
+    ${steamListPanel("topsellers", topSellers)}
+    ${steamListPanel("upcoming", upcoming)}
+    ${steamListPanel("specials", specials)}
+  </div>`;
+}
+
 function storePageHtml({
   mostWanted = [],
   ggPopular = [],
-  storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [] },
+  storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [], steamLists: {} },
   ggDeals = {},
 } = {}) {
-  const popularCards = (mostWanted || [])
-    .map((game) => gameCard(game, { rank: game.rank, href: game.storeUrl }))
-    .join("");
   const ggCards = (ggPopular || []).map((game) => ggCard(game)).join("");
   const dealCards = (storeHub.dealsStrip || []).length
     ? storeHub.dealsStrip
@@ -420,17 +495,15 @@ function storePageHtml({
     : "";
   const stale = ggDealsStaleNote(storeHub, ggDeals);
   return `<div class="gwd-store" data-board="loja">
-    <div class="board-tile" data-board-tile="wanted">
-      ${sectionHead("Mais desejados na Steam", "ranking público da loja · inclui os que você já tem")}
-      ${scrollRow(popularCards)}
+    <div class="board-tile" data-board-tile="steam">
+      ${sectionHead("Steam", "listas da loja · sem os gratuitos populares")}
+      ${steamChartsHtml(storeHub, mostWanted)}
+      ${sectionHead("Descontos e eventos da Steam", "promoções do dia · role para o lado")}
+      ${scrollRow(dealCards)}
     </div>
     <div class="board-tile" data-board-tile="popular">
       ${sectionHead("Most Popular Games", "gg.deals · capas da página da Steam")}
       ${scrollRow(ggCards)}
-    </div>
-    <div class="board-tile" data-board-tile="steam">
-      ${sectionHead("Descontos e eventos da Steam", "promoções do dia · role para o lado")}
-      ${scrollRow(dealCards)}
     </div>
     <div class="board-tile" data-board-tile="newdeals">
       ${sectionHead("New deals", "gg.deals · New deals", ggLink)}
@@ -469,10 +542,6 @@ function renderDashboard(games, extra = {}) {
   const comingCards = coming.map((game, i) => gameCard(game, { rank: i + 1, href: game.storeUrl, soon: true })).join("");
   const saleCards = onSale.map((game, i) => gameCard(game, { rank: i + 1, href: game.storeUrl })).join("");
   const fullCards = fullPrice.map((game, i) => gameCard(game, { rank: i + 1, href: game.storeUrl })).join("");
-
-  const popularCards = (mostWanted || []).map((game) =>
-    gameCard(game, { rank: game.rank, href: game.storeUrl })
-  ).join("");
 
   const ggCards = (ggPopular || []).map((game) => ggCard(game)).join("");
 
@@ -531,8 +600,8 @@ tags:
     ${wishStrip("Preço normal", `${fullPrice.length} jogos · menor preço na frente`, fullCards)}
   </div>
 
-  ${sectionHead("Mais desejados na Steam", "ranking público da loja · inclui os que você já tem")}
-  ${scrollRow(popularCards)}
+  ${sectionHead("Steam", "listas da loja · sem os gratuitos populares")}
+  ${steamChartsHtml(storeHub, mostWanted)}
 
   ${sectionHead("Most Popular Games", "gg.deals · capas da página da Steam")}
   ${scrollRow(ggCards)}

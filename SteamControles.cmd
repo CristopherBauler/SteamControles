@@ -1,17 +1,17 @@
 @echo off
-rem Launcher de Minha Loja dos Desejos. Nao fixe o electron.exe na barra —
-rem fixe dist\SteamControles.exe ou o atalho criado pelo app.
+rem Atalho do app deve apontar para o Electron desta pasta (codigo atual).
+rem dist\SteamControles.exe e um snapshot portatil, nao o atalho do dia a dia.
 cd /d "%~dp0"
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
-if exist "%ROOT%\dist\SteamControles.exe" (
-  start "" "%ROOT%\dist\SteamControles.exe"
+if exist "%ROOT%\node_modules\electron\dist\electron.exe" (
+  start "" "%ROOT%\node_modules\electron\dist\electron.exe" "%ROOT%"
   exit /b 0
 )
 
-if exist "%ROOT%\node_modules\electron\dist\electron.exe" (
-  start "" "%ROOT%\node_modules\electron\dist\electron.exe" "%ROOT%"
+if exist "%ROOT%\dist\SteamControles.exe" (
+  start "" "%ROOT%\dist\SteamControles.exe"
   exit /b 0
 )
 

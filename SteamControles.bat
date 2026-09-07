@@ -1,8 +1,8 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-rem Nao fixe este .bat nem o electron.exe na barra. Use dist\SteamControles.exe
-rem ou o atalho criado no app (Ajustes). O electron.exe SEM a pasta abre a tela Electron.
+rem Nao fixe este .bat nem o electron.exe na barra. Use o atalho
+rem Minha Loja dos Desejos criado pelo app (Ajustes → Criar atalho).
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "ELECTRON=%ROOT%\node_modules\electron\dist\electron.exe"

@@ -18,8 +18,11 @@ let wishGames = [];
 let libraryGames = [];
 let skippedGames = [];
 let libraryMeta = {};
+let epicSession = { loggedIn: false, name: "", count: 0, source: "", error: "" };
 let libraryBusy = false;
-const BACKLOG_SORTS = ["hours", "reviews", "name"];
+let syncUiLocks = 0;
+let lastUiState = null;
+const BACKLOG_SORTS = ["hours", "reviews", "name", "recent"];
 const BACKLOG_SORT_KEY = "mld.backlogSort";
 let backlogSort = "hours";
 let savedTheme = { ...DEFAULT_THEME, tabs: { ...DEFAULT_THEME.tabs } };
@@ -298,12 +301,13 @@ function paintGames() {
 }
 
 const HOUR_SHELVES = [
-  { key: "h100", tone: "green", title: "Mais de 100 h", extra: "os que mais te consumiram", test: (h) => h >= 100 },
-  { key: "h50", tone: "green", title: "50 a 100 h", extra: "já virou hábito", test: (h) => h >= 50 && h < 100 },
-  { key: "h20", tone: "green", title: "20 a 50 h", extra: "bem avançados", test: (h) => h >= 20 && h < 50 },
-  { key: "h10", tone: "green", title: "10 a 20 h", extra: "em andamento", test: (h) => h >= 10 && h < 20 },
-  { key: "h1", tone: "red", title: "Menos de 10 h", extra: "só comecei", test: (h) => h > 0 && h < 10 },
-  { key: "never", tone: "red", title: "Nunca jogado", extra: "zero horas neste PC", test: (h) => h <= 0 },
+  { key: "h100", tone: "green", title: "Mais de 100 h", extra: "os que mais te consumiram", test: (h, game) => game?.store !== "epic" && h >= 100 },
+  { key: "h50", tone: "green", title: "50 a 100 h", extra: "já virou hábito", test: (h, game) => game?.store !== "epic" && h >= 50 && h < 100 },
+  { key: "h20", tone: "green", title: "20 a 50 h", extra: "bem avançados", test: (h, game) => game?.store !== "epic" && h >= 20 && h < 50 },
+  { key: "h10", tone: "green", title: "10 a 20 h", extra: "em andamento", test: (h, game) => game?.store !== "epic" && h >= 10 && h < 20 },
+  { key: "h1", tone: "red", title: "Menos de 10 h", extra: "só comecei", test: (h, game) => game?.store !== "epic" && h > 0 && h < 10 },
+  { key: "epic", tone: "blue", title: "Epic Games", extra: "biblioteca da conta (entre na Epic se faltar jogo)", test: (_h, game) => game?.store === "epic" },
+  { key: "never", tone: "red", title: "Nunca jogado", extra: "zero horas neste PC", test: (h, game) => game?.store !== "epic" && h <= 0 },
 ];
 
 function libHours(game) {
@@ -333,7 +337,7 @@ function formatHoursPlain(hours) {
 
 function groupByHours(games) {
   return HOUR_SHELVES.map((def) => {
-    const items = games.filter((game) => def.test(libHours(game)));
+    const items = games.filter((game) => def.test(libHours(game), game));
     const hours = items.reduce((sum, game) => sum + libHours(game), 0);
     return { ...def, items, hours };
   }).filter((shelf) => shelf.items.length);
@@ -349,7 +353,7 @@ function libCoverList(game) {
   };
   push(game.cover);
   if (Array.isArray(game.covers)) game.covers.forEach(push);
-  if (Number.isInteger(id) && id > 0) {
+  if (game.store !== "epic" && Number.isInteger(id) && id > 0 && id < 2100000000) {
     push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/capsule_231x87.jpg`);
     push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`);
     push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`);
@@ -397,6 +401,7 @@ function libCard(game, skipped) {
     ? `<span class="gwd-bl-never">${esc(hours.text)}</span>`
     : `<span class="gwd-bl-hours">${esc(hours.text)}</span>`;
   const family = game.family ? ` <span class="gwd-bl-family">Família</span>` : "";
+  const epic = game.store === "epic" ? ` <span class="gwd-bl-epic">Epic</span>` : "";
   const reviews =
     game.reviewPercent != null && Number.isFinite(Number(game.reviewPercent))
       ? `<span class="gwd-bl-reviews" title="${esc(String(game.reviewPercent))}% positivas${game.reviewTotal ? ` · ${Number(game.reviewTotal).toLocaleString("pt-BR")} análises` : ""}">${esc(String(game.reviewPercent))}%</span>`
@@ -409,9 +414,9 @@ function libCard(game, skipped) {
   const img = covers.length
     ? `<img src="${esc(covers[0])}" alt="" draggable="false" loading="lazy" data-covers="${esc(covers.slice(1).join("|"))}" onerror="libCoverError(this)">`
     : `<span class="lib-cover-empty" aria-hidden="true"></span>`;
-  const link = `<a class="lib-link" href="${esc(game.storeUrl || "#")}" draggable="false">${img}<span class="lib-name">${esc(game.name || "")}</span></a>`;
+  const link = `<a class="lib-link" href="${esc(game.storeUrl || "#")}" draggable="false">${img}<span class="lib-name" title="${esc(game.name || "")}">${esc(game.name || "")}</span></a>`;
   if (skipped) {
-    const foot = reviews || family ? `<span class="lib-card-reviews">${reviews}${family}</span>` : "";
+    const foot = reviews || family || epic ? `<span class="lib-card-reviews">${reviews}${family}${epic}</span>` : "";
     return `<article class="lib-card" data-app-id="${esc(game.appId)}">
       <input type="checkbox" data-skip="${esc(game.appId)}" checked title="Devolver à biblioteca">
       ${link}
@@ -425,7 +430,7 @@ function libCard(game, skipped) {
     <input type="checkbox" data-skip="${esc(game.appId)}" title="Não vou jogar">
     <span class="lib-move" title="Arrastar para outra lista" aria-hidden="true">⋮⋮</span>
     ${link}
-    ${hoursEl}${reviews}${family}${unpin}
+    ${hoursEl}${reviews}${family}${epic}${unpin}
   </article>`;
 }
 
@@ -450,7 +455,7 @@ function toneMenuHtml(listId, current) {
 function shelfHtml(shelf, skipped) {
   const count = `${shelf.items.length} jogo${shelf.items.length === 1 ? "" : "s"}`;
   const hoursBit = shelf.hours > 0 ? ` · ${formatHoursPlain(shelf.hours)} no total` : "";
-  const sort = ["hours", "reviews", "name"].includes(shelf.sort) ? shelf.sort : "hours";
+  const sort = ["hours", "reviews", "name", "recent"].includes(shelf.sort) ? shelf.sort : "hours";
   const tones = window.libraryBoard?.tones;
   const tone =
     Array.isArray(tones) && tones.some((item) => item.id === shelf.tone) ? shelf.tone : shelf.tone === "red" ? "red" : "green";
@@ -467,6 +472,7 @@ function shelfHtml(shelf, skipped) {
           <option value="hours"${sort === "hours" ? " selected" : ""}>Horas</option>
           <option value="reviews"${sort === "reviews" ? " selected" : ""}>Reviews</option>
           <option value="name"${sort === "name" ? " selected" : ""}>Nome</option>
+          <option value="recent"${sort === "recent" ? " selected" : ""}>Recente</option>
         </select>
         <button type="button" class="lib-list-btn" data-list-edit="${esc(shelf.key)}" title="Renomear lista">✎</button>
         <button type="button" class="lib-list-btn" data-list-del="${esc(shelf.key)}" title="Remover lista">×</button>
@@ -474,6 +480,57 @@ function shelfHtml(shelf, skipped) {
     </div>
     <div class="lib-grid">${empty}</div>
   </section>`;
+}
+
+function readEpicSession(state) {
+  const meta = state?.libraryMeta || libraryMeta || {};
+  const name = String(state?.epicDisplayName || meta.epicAccountName || "").trim();
+  return {
+    loggedIn: Boolean(state?.hasEpic || meta.epicLoggedIn || name),
+    name,
+    count: Number(meta.epicCount) || 0,
+    source: String(meta.epicSource || ""),
+    error: String(meta.epicError || "").trim(),
+    fullLibrary: String(meta.epicSource || "") === "epic-library",
+  };
+}
+
+function epicCtaHtml() {
+  if (document.body.classList.contains("capacitor")) return "";
+  const session = epicSession;
+  if (session.loggedIn) {
+    const who = session.name ? ` <b>${esc(session.name)}</b>` : "";
+    const countBit = session.count
+      ? session.fullLibrary
+        ? ` · ${session.count} jogo(s) da conta`
+        : ` · ${session.count} no app (biblioteca da conta ainda não veio)`
+      : "";
+    const err = session.error ? ` ${esc(session.error)}` : "";
+    return `<div class="lib-epic-cta is-on">
+    <p>Sessão Epic ativa:${who}${countBit}.${err} Este app está logado. Finalizar a sessão não desconecta o launcher da Epic.</p>
+    <div class="lib-epic-cta-actions">
+      <button type="button" id="btnEpicLogoutJogos">Finalizar sessão?</button>
+    </div>
+  </div>`;
+  }
+  const n = Number(libraryMeta.epicCount) || 0;
+  const localNote = n
+    ? `Na Epic, agora só entram os ${n} jogo(s) instalado(s) neste PC.`
+    : "Na Epic ainda não há jogos instalados neste PC.";
+  if (libraryMeta.hasEglSession) {
+    const who = libraryMeta.eglDisplayName ? ` como <b>${esc(libraryMeta.eglDisplayName)}</b>` : "";
+    return `<div class="lib-epic-cta">
+    <p>${localNote} O launcher da Epic neste PC já está conectado${who}. Autorize este app a listar a biblioteca da conta (a senha não passa por aqui).</p>
+    <div class="lib-epic-cta-actions">
+      <button type="button" id="btnEpicLoginJogos">Usar o launcher da Epic</button>
+      <button type="button" class="ghost" id="btnEpicLoginWeb">Entrar no site da Epic</button>
+    </div>
+  </div>`;
+  }
+  return `<div class="lib-epic-cta">
+    <p>${localNote} A biblioteca inteira da conta só aparece depois do login (a senha fica na Epic).</p>
+    <button type="button" id="btnEpicLoginJogos">Puxar biblioteca da Epic</button>
+  </div>`;
 }
 
 function paintLibrary() {
@@ -492,14 +549,20 @@ function paintLibrary() {
     : hintBits.join(" · ");
   const meta = libraryMeta.hint
     ? `<div class="lib-meta">${esc(libraryMeta.hint)} Marque um jogo para mandar para <b>Não vou jogar</b>.</div>`
-    : `<div class="lib-meta">Marque um jogo para <b>Não vou jogar</b>. Arraste um jogo para outra lista. Cada lista tem ordem própria (Horas, Reviews % positivas, Nome) e uma cor.</div>`;
+    : `<div class="lib-meta">Marque um jogo para <b>Não vou jogar</b>. Arraste um jogo para outra lista. Cada lista tem ordem própria (Horas, Reviews % positivas, Nome, Recente) e uma cor.</div>`;
   const body = shelves.map((shelf) => shelfHtml(shelf, false)).join("");
-  $("jogos").innerHTML = meta + (body || `<div class="empty-games">Nenhum jogo na biblioteca. Clique em Atualizar agora.</div>`);
+  $("jogos").innerHTML = meta + epicCtaHtml() + (body || `<div class="empty-games">Nenhum jogo na biblioteca. Clique em Atualizar agora.</div>`);
   if (window.layoutBoard) window.layoutBoard.apply($("jogos"), "jogos");
   if (window.libraryBoard) {
     window.libraryBoard.ensureTools($("jogos"));
     window.libraryBoard.bind($("jogos"), { onChange: () => paintLibrary() });
   }
+  if ($("btnEpicLoginJogos")) {
+    $("btnEpicLoginJogos").onclick = () =>
+      epicLoginFromUi(libraryMeta.hasEglSession ? { mode: "egl" } : undefined);
+  }
+  if ($("btnEpicLoginWeb")) $("btnEpicLoginWeb").onclick = () => epicLoginFromUi({ mode: "web" });
+  if ($("btnEpicLogoutJogos")) $("btnEpicLogoutJogos").onclick = () => epicLogoutFromUi();
 }
 
 function readBacklogSort() {
@@ -532,21 +595,43 @@ function paintSkipped() {
   const query = normalizeQuery($("backlogSearch")?.value);
   const filtered = skippedGames.filter((game) => nameMatches(game.name, query));
   const list = window.libraryBoard?.sortItems ? window.libraryBoard.sortItems(filtered, backlogSort) : filtered;
-  const sortLabel = backlogSort === "reviews" ? "reviews % positivas" : backlogSort === "name" ? "nome" : "horas";
+  const sortLabel =
+    backlogSort === "reviews"
+      ? "reviews % positivas"
+      : backlogSort === "name"
+        ? "nome"
+        : backlogSort === "recent"
+          ? "recentes"
+          : "horas";
   $("backlogHint").textContent = query
     ? `${list.length} resultado(s) em Não vou jogar`
     : `${list.length} jogos · ordem: ${sortLabel} · desmarque para devolver à biblioteca`;
-  const meta = `<div class="lib-meta">Esta lista não apaga o jogo da Steam. Desmarque para devolver à aba <b>Jogos</b>. A ordem (Horas, Reviews % positivas, Nome) vale para a lista inteira.</div>`;
+  const meta = `<div class="lib-meta">Esta lista não apaga o jogo da Steam. Desmarque para devolver à aba <b>Jogos</b>. A ordem (Horas, Reviews % positivas, Nome, Recente) vale para a lista inteira.</div>`;
   const cards = list.map((game) => libCard(game, true)).join("");
   $("backlogSkipped").innerHTML =
     meta +
     (cards ? `<div class="lib-grid">${cards}</div>` : `<div class="empty-games">Nenhum jogo em Não vou jogar.</div>`);
 }
 
+function isSyncBusy() {
+  return syncUiLocks > 0 || Boolean(lastUiState?.syncing);
+}
+
+function applySyncButton() {
+  const btn = $("btnSync");
+  if (!btn) return;
+  const connected = Boolean(lastUiState?.steamId || lastUiState?.profileUrl || lastUiState?.paired);
+  const busy = isSyncBusy();
+  btn.disabled = busy || !connected;
+  btn.classList.toggle("is-syncing", busy);
+  btn.setAttribute("aria-busy", busy ? "true" : "false");
+  document.body.classList.toggle("is-syncing", busy);
+}
+
 function setSyncingUi(syncing) {
-  const on = Boolean(syncing);
-  document.body.classList.toggle("is-syncing", on);
-  $("btnSync").classList.toggle("is-syncing", on);
+  if (syncing) syncUiLocks += 1;
+  else syncUiLocks = Math.max(0, syncUiLocks - 1);
+  applySyncButton();
 }
 
 function paintAccount(state) {
@@ -564,6 +649,43 @@ function paintAccount(state) {
     }
   }
   if (logout) logout.disabled = !connected;
+  const epicStatus = $("epicStatus");
+  const epicOut = $("btnEpicLogout");
+  const epicEgl = $("btnEpicLoginEgl");
+  const epicWeb = $("btnEpicLogin");
+  const epicHint = $("epicHint");
+  const epicBox = epicStatus?.closest(".account-box");
+  const session = readEpicSession(state);
+  if (epicBox) epicBox.classList.toggle("is-epic-on", session.loggedIn);
+  if (epicStatus) {
+    epicStatus.classList.toggle("is-on", session.loggedIn);
+    if (session.loggedIn) {
+      const who = session.name || "conectada";
+      const countBit = session.count
+        ? session.fullLibrary
+          ? ` · ${session.count} jogo(s) da conta`
+          : ` · ${session.count} no app`
+        : "";
+      const err = session.error ? ` · ${session.error}` : "";
+      epicStatus.textContent = `Sessão Epic ativa: ${who}${countBit}${err}`;
+    } else if (state?.libraryMeta?.hasEglSession) {
+      const who = state.libraryMeta.eglDisplayName ? ` (${state.libraryMeta.eglDisplayName})` : "";
+      epicStatus.textContent = `Launcher da Epic conectado neste PC${who} · autorize para puxar a biblioteca`;
+    } else {
+      epicStatus.textContent = "Epic Games: sem sessão neste app · só os jogos instalados neste PC";
+    }
+  }
+  if (epicOut) {
+    epicOut.classList.toggle("hidden", !session.loggedIn);
+    epicOut.disabled = !session.loggedIn;
+  }
+  if (epicEgl) epicEgl.classList.toggle("hidden", session.loggedIn || !state?.libraryMeta?.hasEglSession);
+  if (epicWeb) epicWeb.classList.toggle("hidden", session.loggedIn);
+  if (epicHint) {
+    epicHint.innerHTML = session.loggedIn
+      ? "Este app está logado na Epic. <b>Finalizar sessão</b> só desconecta daqui; o launcher oficial continua."
+      : "Sem sessão neste app, Jogos só lista o que está instalado neste PC. Se o launcher da Epic já estiver conectado, <b>Usar o launcher</b> pede só uma autorização (a senha não passa por aqui). <b>Entrar no site</b> abre a página da Epic. A loja não entrega horas de jogo.";
+  }
   paintPcLink(state);
 }
 
@@ -635,7 +757,9 @@ async function refreshPhoneLinkUi() {
 }
 
 async function steamLoginFromUi() {
+  if (isSyncBusy()) return;
   showError("");
+  setSyncingUi(true);
   try {
     const state = await window.steamApp.login();
     if (state) render(state);
@@ -644,6 +768,8 @@ async function steamLoginFromUi() {
     await refresh();
   } catch (error) {
     showError(error.message || String(error));
+  } finally {
+    setSyncingUi(false);
   }
 }
 
@@ -661,12 +787,12 @@ async function steamLogoutFromUi() {
 }
 
 function render(state) {
+  lastUiState = state;
   const connected = Boolean(state.steamId || state.profileUrl || state.paired);
   $("setup").classList.toggle("hidden", connected);
   $("dash").classList.toggle("hidden", !connected);
   $("statusLine").textContent = formatSyncStatus(state);
-  $("btnSync").disabled = state.syncing || !connected;
-  setSyncingUi(state.syncing);
+  applySyncButton();
   paintAccount(state);
   $("wishCount").textContent = state.wishCount || 0;
   $("saleCount").textContent = state.onSale || 0;
@@ -703,6 +829,7 @@ function render(state) {
   libraryGames = state.libraryGames || [];
   skippedGames = state.skippedGames || [];
   libraryMeta = state.libraryMeta || {};
+  epicSession = readEpicSession(state);
   paintTabCounts();
   paintGames();
   paintLibrary();
@@ -741,26 +868,85 @@ async function refresh() {
 
 $("btnHide").onclick = () => window.steamApp?.hide();
 $("btnSync").onclick = async () => {
+  if (isSyncBusy()) return;
   showError("");
-  $("btnSync").disabled = true;
   setSyncingUi(true);
-  const result = await window.steamApp.sync();
-  if (!result.ok) showError(result.message || "Falha ao sincronizar.");
-  if (result.state) render(result.state);
-  else await refresh();
+  try {
+    const result = await window.steamApp.sync();
+    if (!result?.ok) showError(result?.message || "Falha ao sincronizar.");
+    if (result?.state) render(result.state);
+    else await refresh();
+  } catch (error) {
+    showError(error.message || String(error));
+    try {
+      await refresh();
+    } catch {
+      if (lastUiState) lastUiState.syncing = false;
+    }
+  } finally {
+    setSyncingUi(false);
+  }
 };
 $("btnLogin").onclick = () => steamLoginFromUi();
 if ($("btnSteamLogin")) $("btnSteamLogin").onclick = () => steamLoginFromUi();
+async function epicLoginFromUi(opts) {
+  if (!window.steamApp?.epicLogin) return;
+  showError("");
+  setSyncingUi(true);
+  try {
+    const state = await window.steamApp.epicLogin(opts || {});
+    if (state) {
+      render(state);
+      const session = readEpicSession(state);
+      if (session.loggedIn) {
+        showError("");
+        $("statusLine").textContent = session.name
+          ? `Sessão Epic ativa: ${session.name}`
+          : "Sessão Epic ativa neste app";
+      }
+    }
+  } catch (error) {
+    showError(error.message || String(error));
+  } finally {
+    setSyncingUi(false);
+  }
+}
+
+async function epicLogoutFromUi() {
+  if (!window.steamApp?.epicLogout) return;
+  const who = epicSession.name ? ` (${epicSession.name})` : "";
+  const ok = window.confirm(`Finalizar a sessão da Epic neste app${who}? O launcher oficial continua logado.`);
+  if (!ok) return;
+  showError("");
+  try {
+    const state = await window.steamApp.epicLogout();
+    if (state) render(state);
+  } catch (error) {
+    showError(error.message || String(error));
+  }
+}
+
+if ($("btnEpicLogin")) $("btnEpicLogin").onclick = () => epicLoginFromUi({ mode: "web" });
+if ($("btnEpicLoginEgl")) $("btnEpicLoginEgl").onclick = () => epicLoginFromUi({ mode: "egl" });
+if ($("btnEpicLogout")) $("btnEpicLogout").onclick = () => epicLogoutFromUi();
 if ($("btnLogout")) $("btnLogout").onclick = () => steamLogoutFromUi();
 $("btnSaveSetup").onclick = async () => {
+  if (isSyncBusy()) return;
   showError("");
-  await window.steamApp.saveSettings({
-    steamId: $("steamIdInput").value.trim(),
-    steamWebApiKey: $("apiKeyInput").value.trim(),
-  });
-  const result = await window.steamApp.sync();
-  if (!result.ok) showError(result.message || "Conecte a Steam e tente de novo.");
-  await refresh();
+  setSyncingUi(true);
+  try {
+    await window.steamApp.saveSettings({
+      steamId: $("steamIdInput").value.trim(),
+      steamWebApiKey: $("apiKeyInput").value.trim(),
+    });
+    const result = await window.steamApp.sync();
+    if (!result?.ok) showError(result?.message || "Conecte a Steam e tente de novo.");
+    await refresh();
+  } catch (error) {
+    showError(error.message || String(error));
+  } finally {
+    setSyncingUi(false);
+  }
 };
 function refreshIconPreview() {
   $("iconPreview").src = `../icon.png?t=${Date.now()}`;
@@ -859,6 +1045,7 @@ async function onSkipToggle(event) {
   libraryBusy = true;
   input.disabled = true;
   try {
+    if (input.checked) applyBacklogSort("recent", true);
     const state = await window.steamApp.toggleSkipped({
       appId: Number(input.dataset.skip),
       skipped: input.checked,
@@ -1021,8 +1208,8 @@ window.steamApp.onSync((payload) => {
     return;
   }
   if (payload?.syncing) {
-    $("btnSync").disabled = true;
-    setSyncingUi(true);
+    lastUiState = { ...(lastUiState || {}), syncing: true };
+    applySyncButton();
     $("statusLine").textContent = formatSyncStatus(payload);
     return;
   }

@@ -95,15 +95,23 @@
     <tr><th>Aba</th><th>Precisa Steam?</th><th>Fonte</th><th>O que é local</th></tr>
     <tr><td>Wishlist</td><td>Sim (OpenID + wishlist pública)</td><td>Community + store appdetails (BRL)</td><td>Cache <code>wishlist.json</code></td></tr>
     <tr><td>Novidades</td><td>Sim (é a wishlist)</td><td>Partner events / news da Steam, 7 dias</td><td><code>wishlistUpdates.json</code></td></tr>
-    <tr><td>Loja</td><td>Não</td><td>Steam <code>featuredcategories</code> + gg.deals HTML</td><td><code>storeHub.json</code>, <code>ggPopular.json</code>, <code>ggDeals.json</code></td></tr>
-    <tr><td>Jogos</td><td>Sim (biblioteca)</td><td>Web API e/ou cache do cliente Steam neste PC</td><td>horas em <code>ownedPlaytimes.json</code></td></tr>
-    <tr><td>Não vou jogar</td><td>Sim (é a mesma biblioteca)</td><td>—</td><td><b>marcações do usuário</b> em <code>backlogDone.json</code></td></tr>
+    <tr><td>Loja</td><td>Não</td><td>Steam search (lançamentos / vendidos / aguardados / ofertas) + <code>featuredcategories</code> + gg.deals HTML</td><td><code>storeHub.json</code> (<code>steamLists</code>), <code>ggPopular.json</code>, <code>ggDeals.json</code></td></tr>
+    <tr><td>Jogos</td><td>Steam e/ou Epic</td><td>Steam: Web API / cache local. Epic: jogos instalados neste PC + biblioteca da conta (login no launcher)</td><td>horas Steam em <code>ownedPlaytimes.json</code>; Epic em <code>epicLibrary.json</code> (sem horas)</td></tr>
+    <tr><td>Não vou jogar</td><td>Mesma lista de Jogos (Steam + Epic)</td><td>—</td><td><b>marcações do usuário</b> em <code>backlogDone.json</code></td></tr>
   </table>
   <div class="note">
     gg.deals não tem login nosso. Cloudflare bloqueia <code>fetch</code> do Node.
     No Electron o scrape usa uma janela Chromium oculta (<code>desktop/browserFetch.js</code>)
     para parecer um Chrome de verdade. Se ainda bloquear, a UI mostra o último ranking salvo — nunca mais
     uma lista-semente fingindo ser o site.
+  </div>
+  <div class="note">
+    A Epic não publica a biblioteca da conta. Sem login o app só lê os <code>.item</code> instalados em
+    <code>%ProgramData%\Epic\EpicGamesLauncher\Data\Manifests</code> (neste PC, o que o launcher já baixou).
+    Com o launcher já conectado, <b>Usar o launcher da Epic</b> pede autorização e reutiliza a sessão
+    salva em <code>GameUserSettings.ini</code> (RememberMe). Isso gira o token da Epic: o launcher oficial
+    pode pedir login de novo se ficar aberto. Alternativa: <b>Entrar no site da Epic</b> (OAuth no Chromium).
+    A senha fica na Epic. Não há horas de jogo. DLC / Unreal Engine ficam de fora.
   </div>
 
   <h2>5. Persistência (o ponto das 700 marcações)</h2>
@@ -112,9 +120,9 @@
     de novo. “Não vou jogar”, cores, intervalo de sync e SteamID <b>não existem na Valve</b>. São dados do app.
   </p>
   <ol class="steps">
-    <li>Fonte da verdade das marcações: <code>Data/backlogDone.json</code> (appIds + snapshot do jogo).</li>
+    <li>Fonte da verdade das marcações: <code>Data/backlogDone.json</code> (appIds + snapshot do jogo, inclusive <code>skippedAt</code> para ordenar Recente).</li>
     <li>Espelho automático em <code>%AppData%\Roaming\MinhaLojaDosDesejos\</code>. Desinstalar o atalho não apaga isso.</li>
-    <li>O exe portable grava em <code>%AppData%\Roaming\Minha Loja dos Desejos\</code> (com espaços). O <code>npm run app</code> grava no <code>Data/</code> do vault. São duas casas. Na abertura o app <b>hidrata</b> a casa vazia a partir da mais cheia (espelho ou o <code>source.json</code> apontando para o vault) e <b>nunca copia uma lista vazia por cima de uma cheia</b>.</li>
+    <li>O exe portable grava em <code>%AppData%\Roaming\Minha Loja dos Desejos\</code> (com espaços). O atalho <b>Minha Loja dos Desejos</b> abre o Electron desta pasta (mesmo código e <code>Data/</code> do vault). São duas casas. Na abertura o app <b>hidrata</b> a casa vazia a partir da mais cheia (espelho ou o <code>source.json</code> apontando para o vault) e <b>nunca copia uma lista vazia por cima de uma cheia</b>.</li>
     <li>Ajustes → <b>Exportar cópia</b> / <b>Restaurar cópia</b>: JSON único para formatar o Windows ou trocar de PC. Restaurar também devolve cores, layout e listas da aba Jogos.</li>
     <li>O usuário não precisa abrir pasta nem editar JSON. Caminhos crus saíram da UI de propósito.</li>
   </ol>
@@ -125,7 +133,7 @@
 
   <h2>6. Timers de sync (PC)</h2>
   <ul>
-    <li><b>Loja Steam</b> (hub / mais desejados): junto com o sync da wishlist (6 / 12 / 24 h) e no <b>Atualizar agora</b>. Sem timer de 30 min.</li>
+    <li><b>Loja Steam</b> (listas da loja + hub / descontos): junto com o sync da wishlist (6 / 12 / 24 h) e no <b>Atualizar agora</b>. Sem timer de 30 min.</li>
     <li><b>gg.deals</b> (Chromium + Cloudflare): <b>só</b> no <b>Atualizar agora</b>. O sync automático não abre o site, para não tomar bloqueio. Se o scrape falhar, a UI mostra o último ranking e pede para tentar de novo no botão.</li>
     <li>Wishlist + Novidades + Jogos/backlog: o que o usuário escolhe em Ajustes (6 / 12 / 24 h). No PC isso é o timer da bandeja. No celular vale ao reabrir o app ou tocar Atualizar. Os dois intervalos são independentes.</li>
     <li><b>Atualizar agora</b>: sync completo (se estiver logado). Inclui Loja Steam e o scrape do gg.deals.</li>
@@ -146,7 +154,8 @@
   </p>
 
   <h2>8. Arquivos-chave para abrir no código</h2>
-  <pre>Scripts/updateWishlist.js   orquestra full vs scope:"store"
+  <pre>Scripts/epicApi.js           biblioteca Epic (manifests locais + login do launcher)
+Scripts/updateWishlist.js   orquestra full vs scope:"store"
 Scripts/steamApi.js         Valve (wishlist, preços, hub, EA gênero 70)
 Scripts/ggDeals.js          parse + scrape; setHtmlFetcher(Chromium)
 Scripts/backlog.js          biblioteca + toggle Não vou jogar
@@ -158,7 +167,13 @@ mobile/                     Capacitor (fase seguinte ao PC)</pre>
 
   <h2>9. Histórico deste documento</h2>
   <ul>
-    <li>2026-09-02 — gg.deals só no Atualizar agora; capas das ofertas pela CDN da Steam (sem timer de 30 min).</li>
+    <li>2026-09-06 — Com o launcher da Epic já conectado, Jogos pede autorização e reutiliza a sessão RememberMe (pode derrubar o login do launcher se ele ficar aberto). Entrar no site continua como alternativa.</li>
+    <li>2026-09-06 — Biblioteca Epic completa exige Entrar na Epic (Ajustes ou botão na aba Jogos); sem login só os instalados neste PC. library-service + catálogo; DLC/UE de fora.</li>
+    <li>2026-09-06 — Jogos/Backlog também leem a Epic: instalados neste PC sem login; biblioteca completa com Entrar na Epic (Ajustes). Selo Epic no card; sem horas (a loja não entrega playtime).</li>
+    <li>2026-09-06 — Atalho da área de trabalho abre o app desta pasta (código atual), não o exe portátil antigo. Novidades resolvem o nome do jogo no lugar de “App 123”.</li>
+    <li>2026-09-05 — Loja: bloco Steam com Lançamentos populares, Mais vendidos, Mais aguardados e Ofertas (sem Gratuitos populares), junto dos descontos e eventos.</li>
+    <li>2026-09-02 — Recente também nas listas da aba Jogos (data em que o jogo entrou na biblioteca).</li>
+    <li>2026-09-02 — Não vou jogar ordena também por Recente (data em que o jogo entrou na lista).</li>
     <li>2026-09-01 — hydrate: exe e vault não se apagam; cópia vazia não sobrescreve backlog/cores/listas; listas de Jogos recriam faixas de horas que ainda têm jogos.</li>
     <li>2026-09-01 — celular: primeiro espelho do PC, depois sync Steam independente; marcas LAN; intervalo próprio ao reabrir.</li>
     <li>2026-09-01 — primeira versão: origem Obsidian→Electron→Capacitor, persistência AppData, Loja 30 min, scrape Chromium, nuvem para terceiros.</li>

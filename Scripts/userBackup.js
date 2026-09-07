@@ -9,7 +9,7 @@
 const fs = require("fs/promises");
 const path = require("path");
 const os = require("os");
-const { readJson, writeJson, DEFAULT_THEME, normalizeTheme } = require("./config");
+const { readJson, writeJson, DEFAULT_THEME, normalizeTheme, normalizeBacklogSort } = require("./config");
 
 const MIRROR_NAME = "MinhaLojaDosDesejos";
 
@@ -47,6 +47,30 @@ function countGamesMap(raw) {
 
 function countDeals(raw) {
   return (Array.isArray(raw?.newDeals) ? raw.newDeals.length : 0) + (Array.isArray(raw?.bestDeals) ? raw.bestDeals.length : 0);
+}
+
+function stampMs(raw) {
+  const t = Date.parse(raw?.lastUpdate || raw?.updatedAt || 0);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function wishlistScore(raw) {
+  const n = Array.isArray(raw?.games) ? raw.games.length : 0;
+  return stampMs(raw) * 1000 + n;
+}
+
+function updatesScore(raw) {
+  const n = Array.isArray(raw?.events) ? raw.events.length : 0;
+  return stampMs(raw) * 1000 + n;
+}
+
+function storeHubScore(raw) {
+  const lists = raw?.steamLists && typeof raw.steamLists === "object" ? raw.steamLists : {};
+  const listRows = ["popularNew", "topSellers", "upcoming", "specials"].reduce(
+    (n, key) => n + (Array.isArray(lists[key]) ? lists[key].length : 0),
+    0
+  );
+  return countDeals(raw) + listRows * 5 + (Array.isArray(raw?.events) ? raw.events.length : 0);
 }
 
 function listsRichness(lists) {
@@ -131,6 +155,9 @@ async function collectDonorRoots(config) {
 
   const mirror = mirrorPaths();
   add(mirror.root, mirror.settings);
+
+  const packagedHome = path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Minha Loja dos Desejos");
+  add(path.join(packagedHome, "Data"), path.join(packagedHome, "config.json"));
 
   const hint = await readSourceHint();
   if (hint?.dataDir) add(hint.dataDir, hint.configPath);
@@ -219,7 +246,7 @@ function settingsFromConfig(config) {
     layout: config.layout && typeof config.layout === "object" ? config.layout : {},
     libraryLists:
       config.libraryLists && typeof config.libraryLists === "object" ? config.libraryLists : { lists: [], pins: {} },
-    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
+    backlogSort: normalizeBacklogSort(config.backlogSort),
     hasApiKey: Boolean(config.steamWebApiKey),
   };
 }
@@ -258,7 +285,13 @@ async function hydrateSettings(config, donors) {
       changed = true;
     }
     if ((!next.backlogSort || next.backlogSort === "hours") && other.backlogSort && other.backlogSort !== "hours") {
-      next.backlogSort = other.backlogSort;
+      next.backlogSort = normalizeBacklogSort(other.backlogSort);
+      changed = true;
+    }
+    if (!next.epicRefreshToken && other.epicRefreshToken) {
+      next.epicRefreshToken = other.epicRefreshToken;
+      if (other.epicAccountId) next.epicAccountId = other.epicAccountId;
+      if (other.epicDisplayName) next.epicDisplayName = other.epicDisplayName;
       changed = true;
     }
   }
@@ -294,10 +327,17 @@ async function hydrateUserData(config, options = {}) {
     await hydrateJsonIfRicher(paths.ggDeals, dataFiles("ggDeals.json"), countDeals);
   }
   if (paths.storeHub) {
-    await hydrateJsonIfRicher(paths.storeHub, dataFiles("storeHub.json"), countDeals);
+    await hydrateJsonIfRicher(paths.storeHub, dataFiles("storeHub.json"), storeHubScore);
   }
   if (paths.wishlist) {
+    await hydrateJsonIfRicher(paths.wishlist, dataFiles("wishlist.json"), wishlistScore);
     await fillWishlistNames(paths.wishlist, dataFiles("wishlist.json"));
+  }
+  if (paths.wishlistUpdates) {
+    await hydrateJsonIfRicher(paths.wishlistUpdates, dataFiles("wishlistUpdates.json"), updatesScore);
+  }
+  if (paths.epicLibrary) {
+    await hydrateJsonIfRicher(paths.epicLibrary, dataFiles("epicLibrary.json"), countGamesMap);
   }
 
   await hydrateSettings(config, donors);
@@ -362,8 +402,11 @@ async function buildExportPayload(config) {
     layout: config.layout && typeof config.layout === "object" ? config.layout : {},
     libraryLists:
       config.libraryLists && typeof config.libraryLists === "object" ? config.libraryLists : { lists: [], pins: {} },
-    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
+    backlogSort: normalizeBacklogSort(config.backlogSort),
     steamWebApiKey: config.steamWebApiKey || "",
+    epicDisplayName: config.epicDisplayName || "",
+    epicRefreshToken: config.epicRefreshToken || "",
+    epicAccountId: config.epicAccountId || "",
     backlogDone: done,
     backlogTracked: tracked,
   };

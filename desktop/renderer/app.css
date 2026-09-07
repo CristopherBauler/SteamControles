@@ -119,6 +119,14 @@ button.icon {
   color: var(--text);
   word-break: break-all;
 }
+.account-box.is-epic-on {
+  border-color: #2d8a56;
+  background: #15261c;
+}
+.account-status.is-on {
+  color: #7ee0a8;
+  font-weight: 700;
+}
 .account-box .account-hint { margin: 8px 0 0; }
 .account-box button#btnLogout,
 .account-box button#btnPcDisconnect,
@@ -317,6 +325,9 @@ input, select {
   margin-top: 4px;
   position: relative;
 }
+#tab-loja [data-board-tile="steam"] {
+  overflow: auto;
+}
 .stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
@@ -492,6 +503,32 @@ h2 { margin: 18px 20px 8px; font-size: 15px; }
   line-height: 1.4;
 }
 .lib-meta b { color: var(--text); }
+.lib-epic-cta {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: #152033;
+  border: 1px solid #3d6aa8;
+  border-radius: 12px;
+}
+.lib-epic-cta p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.45;
+}
+.lib-epic-cta button {
+  width: auto;
+}
+.lib-epic-cta.is-on {
+  background: #15261c;
+  border-color: #2d8a56;
+}
+.lib-epic-cta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
 .lib-group {
   --lib-bg: #15261c;
   --lib-border: #2d8a56;
@@ -738,6 +775,12 @@ h2 { margin: 18px 20px 8px; font-size: 15px; }
 .gwd-bl-family {
   flex: 0 0 auto;
   color: #e0b84a;
+  font-size: 10px;
+  font-weight: 700;
+}
+.gwd-bl-epic {
+  flex: 0 0 auto;
+  color: #7ad7ff;
   font-size: 10px;
   font-weight: 700;
 }
@@ -1006,6 +1049,8 @@ body.capacitor {
 
 #btnSync.is-syncing {
   animation: sync-breathe 1.7s ease-in-out infinite;
+  pointer-events: none;
+  cursor: progress;
 }
 @keyframes sync-breathe {
   0%, 100% { opacity: 1; transform: scale(1); }

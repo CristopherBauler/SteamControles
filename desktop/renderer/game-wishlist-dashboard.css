@@ -707,3 +707,160 @@
   background: #21262d;
   flex-shrink: 0;
 }
+
+.game-wishlist-dashboard .gwd-steam {
+  position: relative;
+}
+.game-wishlist-dashboard .gwd-steam-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.game-wishlist-dashboard .gwd-steam-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 2px 0 10px;
+  border-bottom: 1px solid #2b3240;
+  padding: 0 2px 0;
+}
+.game-wishlist-dashboard .gwd-steam-tab {
+  display: inline-block;
+  padding: 8px 2px 10px;
+  color: #9aa7b8;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.game-wishlist-dashboard .gwd-steam-tab:hover {
+  color: #e8edf4;
+}
+.game-wishlist-dashboard .gwd-steam-panel {
+  display: none;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.game-wishlist-dashboard #gwdSteamPopularnew:checked ~ .gwd-steam-tabs label[for="gwdSteamPopularnew"],
+.game-wishlist-dashboard #gwdSteamTopsellers:checked ~ .gwd-steam-tabs label[for="gwdSteamTopsellers"],
+.game-wishlist-dashboard #gwdSteamUpcoming:checked ~ .gwd-steam-tabs label[for="gwdSteamUpcoming"],
+.game-wishlist-dashboard #gwdSteamSpecials:checked ~ .gwd-steam-tabs label[for="gwdSteamSpecials"] {
+  color: #e8edf4;
+  border-bottom-color: #67c1f5;
+}
+.game-wishlist-dashboard #gwdSteamPopularnew:checked ~ .gwd-steam-panel[data-panel="popularnew"],
+.game-wishlist-dashboard #gwdSteamTopsellers:checked ~ .gwd-steam-panel[data-panel="topsellers"],
+.game-wishlist-dashboard #gwdSteamUpcoming:checked ~ .gwd-steam-panel[data-panel="upcoming"],
+.game-wishlist-dashboard #gwdSteamSpecials:checked ~ .gwd-steam-panel[data-panel="specials"] {
+  display: block;
+}
+.game-wishlist-dashboard a.gwd-steam-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 6px;
+  text-decoration: none !important;
+  color: #e8edf4 !important;
+  border-bottom: 1px solid #232a35;
+}
+.game-wishlist-dashboard a.gwd-steam-row:hover {
+  background: #1e2734;
+}
+.game-wishlist-dashboard .gwd-steam-art {
+  position: relative;
+  flex: 0 0 168px;
+}
+.game-wishlist-dashboard .gwd-steam-art img,
+.game-wishlist-dashboard .gwd-steam-art .gwd-card-ph {
+  width: 168px;
+  height: 78px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+  background: #21262d;
+}
+.game-wishlist-dashboard .gwd-wish-ribbon {
+  position: absolute;
+  left: -28px;
+  top: 10px;
+  width: 120px;
+  padding: 3px 0;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: #fff;
+  background: #1a9fff;
+  transform: rotate(-35deg);
+  box-shadow: 0 1px 4px #0008;
+}
+.game-wishlist-dashboard .gwd-steam-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.game-wishlist-dashboard .gwd-steam-name {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.game-wishlist-dashboard .gwd-steam-tags {
+  margin-top: 4px;
+  color: #8b98a8;
+  font-size: 12px;
+}
+.game-wishlist-dashboard .gwd-steam-date {
+  margin-top: 4px;
+  color: #6e7a88;
+  font-size: 12px;
+}
+.game-wishlist-dashboard .gwd-steam-cost {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-left: 8px;
+}
+.game-wishlist-dashboard .gwd-steam-pct {
+  background: #4c6b22;
+  color: #beee11;
+  font-weight: 800;
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+.game-wishlist-dashboard .gwd-steam-was {
+  color: #738494;
+  text-decoration: line-through;
+  font-size: 13px;
+}
+.game-wishlist-dashboard .gwd-steam-now {
+  color: #e8edf4;
+  font-weight: 700;
+  font-size: 15px;
+}
+.game-wishlist-dashboard .gwd-steam-free {
+  color: #a1cd44;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .game-wishlist-dashboard a.gwd-steam-row {
+    flex-wrap: wrap;
+  }
+  .game-wishlist-dashboard .gwd-steam-cost {
+    width: 100%;
+    margin-left: 0;
+    padding-left: 0;
+    justify-content: flex-end;
+  }
+  .game-wishlist-dashboard .gwd-wish-ribbon {
+    left: -8px;
+    top: 8px;
+    transform: rotate(-28deg);
+  }
+}

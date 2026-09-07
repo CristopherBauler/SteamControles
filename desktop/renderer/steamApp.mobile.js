@@ -60,6 +60,10 @@
   const APK_RELEASES_URL = "https://github.com/CristopherBauler/SteamControles/releases";
   const EA_SCHEMA = 2;
   const SKIP_APP_IDS = new Set([7, 228980, 250820]);
+  const EPIC_APP_BASE = 2100000000;
+  function isEpicGame(game) {
+    return game?.store === "epic" || Number(game?.appId) >= EPIC_APP_BASE;
+  }
   const JUNK_NAME =
     /soundtrack|\bost\b|dedicated server|server dedicated|sound track|artwork book|^steamworks common|^steamvr\b|\bproton\b|^steam (game notes|input configs|screenshots|linux runtime)|eula$/i;
 
@@ -708,16 +712,27 @@
         capsuleUrl(appId);
       const cents = Number(block.match(/data-price-final="(\d+)"/)?.[1] || 0);
       const discount = Number(
-        block.match(/discount_pct[^>]*>\s*-?(\d+)\s*%/)?.[1] || block.match(/-(\d+)\s*%/)?.[1] || 0
+        block.match(/data-discount="(\d+)"/)?.[1] ||
+          block.match(/discount_pct[^>]*>\s*-?(\d+)\s*%/)?.[1] ||
+          0
       );
+      const isFree = /discount_final_price\s+free|>Grátis</i.test(block);
+      const originalLabel = decodeHtml(block.match(/discount_original_price">([^<]+)/)?.[1] || "");
+      const finalLabel = decodeHtml(block.match(/discount_final_price[^>]*>([^<]+)/)?.[1] || "");
+      const releaseDate = decodeHtml(block.match(/search_released[^>]*>\s*([^<]+)/)?.[1] || "");
       games.push({
         rank: games.length + 1,
         appId,
         name: decodeHtml(name),
         image,
         headerImage: image,
-        currentPrice: cents > 0 ? centsToReais(cents) : null,
+        currentPrice: isFree ? 0 : cents > 0 ? centsToReais(cents) : null,
+        originalPriceLabel: originalLabel,
+        priceLabel: isFree ? "Grátis" : finalLabel,
         discount,
+        isFree,
+        releaseDate,
+        tags: [],
         storeUrl: `https://store.steampowered.com/app/${appId}`,
         ggDealsUrl: `https://gg.deals/steam/app/${appId}/`,
         source: "Steam",
@@ -895,19 +910,25 @@
 
   function publicGame(game) {
     const id = Number(game.appId);
-    const cover = `https://cdn.akamai.steamstatic.com/steam/apps/${id}/capsule_231x87.jpg`;
+    const epic = isEpicGame(game);
+    const cover = epic
+      ? game.cover || game.coverUrl || ""
+      : `https://cdn.akamai.steamstatic.com/steam/apps/${id}/capsule_231x87.jpg`;
     return {
       appId: id,
       name: game.name || `App ${id}`,
       cover,
-      covers: [
-        cover,
-        `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`,
-        capsuleUrl(id),
-      ],
+      covers: epic
+        ? [game.cover, game.coverUrl, ...(Array.isArray(game.covers) ? game.covers : [])].filter(Boolean)
+        : [
+            cover,
+            `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`,
+            capsuleUrl(id),
+          ],
       hours: Number(game.hours) || 0,
       family: Boolean(game.family),
-      storeUrl: `https://store.steampowered.com/app/${id}`,
+      store: epic ? "epic" : "steam",
+      storeUrl: game.storeUrl || (epic ? "https://store.epicgames.com/pt-BR/" : `https://store.steampowered.com/app/${id}`),
       reviewPercent: game.reviewPercent != null && Number.isFinite(Number(game.reviewPercent)) ? Number(game.reviewPercent) : null,
       reviewTotal: Number(game.reviewTotal) || 0,
     };
@@ -947,6 +968,7 @@
     const ttl = 14 * 24 * 60 * 60 * 1000;
     const stale = (games || [])
       .filter((game) => {
+        if (isEpicGame(game)) return false;
         const hit = cache.libraryReviews[String(game.appId)];
         if (!hit || !hit.fetchedAt) return true;
         const age = now - Date.parse(hit.fetchedAt);
@@ -1008,7 +1030,8 @@
       const have = new Set(games.map((game) => Number(game.appId)));
       for (const game of previous) {
         const id = Number(game.appId);
-        if (id && !have.has(id) && skipped.has(id)) catalog.push(game);
+        if (!id || have.has(id)) continue;
+        if (skipped.has(id) || isEpicGame(game)) catalog.push(game);
       }
     }
     const open = catalog.filter((game) => !skipped.has(Number(game.appId)));
@@ -1184,11 +1207,38 @@
     return "";
   }
 
+  function dealCoverUrls(game) {
+    const urls = [];
+    const seen = new Set();
+    const push = (value) => {
+      const url = String(value || "").trim();
+      if (!url || seen.has(url) || /img\.gg\.deals/i.test(url)) return;
+      seen.add(url);
+      urls.push(url);
+    };
+    const id = Number(game?.appId);
+    push(game?.headerImage);
+    push(game?.image);
+    if (Number.isInteger(id) && id > 0) {
+      push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`);
+      push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/capsule_231x87.jpg`);
+      push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`);
+      push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`);
+    }
+    const gg = String(game?.headerImage || game?.image || "").trim();
+    if (!urls.length && gg) urls.push(gg);
+    return urls;
+  }
+
   function dealCoverError(img) {
-    const next = String(img.getAttribute("data-fallback") || "").trim();
-    if (next && img.getAttribute("src") !== next) {
+    const next = String(img.dataset.covers || img.getAttribute("data-fallback") || "")
+      .split("|")
+      .map((url) => url.trim())
+      .filter(Boolean);
+    if (next.length && img.getAttribute("src") !== next[0]) {
+      img.dataset.covers = next.slice(1).join("|");
       img.removeAttribute("data-fallback");
-      img.src = next;
+      img.src = next[0];
       return;
     }
     const ph = document.createElement("div");
@@ -1198,19 +1248,10 @@
   window.dealCoverError = dealCoverError;
 
   function dealThumb(game) {
-    const img = cover(game);
-    const id = Number(game?.appId);
-    const fallback =
-      Number.isInteger(id) && id > 0
-        ? `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`
-        : "";
-    if (!img && !fallback) return `<div class="gwd-deal-ph"></div>`;
-    const src = img || fallback;
-    const next = src === fallback ? "" : fallback;
-    const err = next
-      ? ` data-fallback="${esc(next)}" onerror="dealCoverError(this)"`
-      : ` onerror="dealCoverError(this)"`;
-    return `<img src="${esc(src)}" alt="" referrerpolicy="no-referrer"${err}>`;
+    const urls = dealCoverUrls(game);
+    if (!urls.length) return `<div class="gwd-deal-ph"></div>`;
+    const rest = urls.slice(1).join("|");
+    return `<img src="${esc(urls[0])}" alt="" referrerpolicy="no-referrer" loading="lazy" data-covers="${esc(rest)}" onerror="dealCoverError(this)">`;
   }
 
   function discTag(discount) {
@@ -1287,10 +1328,61 @@
     </a>`;
   }
 
+  function steamListRow(game) {
+    const img = cover(game);
+    const art = img ? `<img src="${esc(img)}" alt="">` : `<div class="gwd-card-ph"></div>`;
+    const tags = (game.tags || []).filter(Boolean).slice(0, 3).join(", ");
+    const date = String(game.releaseDate || "").trim();
+    const wish = game.onWishlist ? `<span class="gwd-wish-ribbon">★ NA LISTA DE DESEJOS</span>` : "";
+    const disc = Number(game.discount) || 0;
+    const free = game.isFree || game.currentPrice === 0;
+    const cost = free
+      ? `<div class="gwd-steam-cost"><span class="gwd-steam-free">Grátis</span></div>`
+      : `<div class="gwd-steam-cost">${
+          disc > 0 ? `<span class="gwd-steam-pct">-${esc(disc)}%</span>` : ""
+        }${
+          disc > 0 && game.originalPriceLabel ? `<span class="gwd-steam-was">${esc(game.originalPriceLabel)}</span>` : ""
+        }<span class="gwd-steam-now">${
+          game.currentPrice != null ? esc(formatBRL(game.currentPrice)) : esc(game.priceLabel || "—")
+        }</span></div>`;
+    return `<a class="gwd-steam-row" href="${esc(game.storeUrl || "#")}">
+      <div class="gwd-steam-art">${art}${wish}</div>
+      <div class="gwd-steam-body">
+        <div class="gwd-steam-name">${esc(game.name)}</div>
+        ${tags ? `<div class="gwd-steam-tags">${esc(tags)}</div>` : ""}
+        ${date ? `<div class="gwd-steam-date">Lançamento: ${esc(date)}</div>` : ""}
+      </div>
+      ${cost}
+    </a>`;
+  }
+
+  function steamChartsHtml(storeHub, mostWanted) {
+    const lists = storeHub?.steamLists || {};
+    const panel = (id, games) => {
+      const rows = (games || []).map(steamListRow).join("");
+      return `<div class="gwd-steam-panel" data-panel="${id}">${
+        rows || `<div class="gwd-empty">Nada nesta lista agora.</div>`
+      }</div>`;
+    };
+    return `<div class="gwd-steam">
+      <input class="gwd-steam-radio" type="radio" name="gwdSteamTab" id="gwdSteamPopularnew" checked>
+      <input class="gwd-steam-radio" type="radio" name="gwdSteamTab" id="gwdSteamTopsellers">
+      <input class="gwd-steam-radio" type="radio" name="gwdSteamTab" id="gwdSteamUpcoming">
+      <input class="gwd-steam-radio" type="radio" name="gwdSteamTab" id="gwdSteamSpecials">
+      <div class="gwd-steam-tabs" role="tablist">
+        <label class="gwd-steam-tab" for="gwdSteamPopularnew">Lançamentos populares</label>
+        <label class="gwd-steam-tab" for="gwdSteamTopsellers">Mais vendidos</label>
+        <label class="gwd-steam-tab" for="gwdSteamUpcoming">Mais aguardados</label>
+        <label class="gwd-steam-tab" for="gwdSteamSpecials">Ofertas</label>
+      </div>
+      ${panel("popularnew", lists.popularNew)}
+      ${panel("topsellers", lists.topSellers)}
+      ${panel("upcoming", lists.upcoming || mostWanted)}
+      ${panel("specials", lists.specials || storeHub?.specials)}
+    </div>`;
+  }
+
   function storePageHtml({ mostWanted, ggPopular, storeHub, ggDeals, ggBlocked }) {
-    const popularCards = (mostWanted || [])
-      .map((game) => gameCard(game, { rank: game.rank, href: game.storeUrl }))
-      .join("");
     const ggCards = (ggPopular || []).map((game) => gameCard(game, { rank: game.rank, href: game.storeUrl })).join("");
     const dealCards = (storeHub.dealsStrip || []).length
       ? storeHub.dealsStrip
@@ -1303,20 +1395,18 @@
     const bestDeals =
       (ggDeals.bestDeals || []).map(dealRow).join("") || `<div class="gwd-empty">Sem best deals agora.</div>`;
     return `<div class="gwd-store" data-board="loja">
-      <div class="board-tile" data-board-tile="wanted">
-        ${sectionHead("Mais desejados na Steam", "ranking público da loja")}
-        ${scrollRow(popularCards)}
-      </div>
-      <div class="board-tile" data-board-tile="popular">
-        ${sectionHead("Em evidência", ggBlocked ? "Steam · gg.deals indisponível neste celular" : "loja · capas da Steam", { href: "https://gg.deals/", label: "Abrir gg.deals" })}
-        ${scrollRow(ggCards || popularCards)}
-      </div>
       <div class="board-tile" data-board-tile="steam">
+        ${sectionHead("Steam", "listas da loja · sem os gratuitos populares")}
+        ${steamChartsHtml(storeHub, mostWanted)}
         ${sectionHead("Descontos e eventos da Steam", "promoções do dia · toque abre a Steam")}
         ${scrollRow(dealCards)}
       </div>
+      <div class="board-tile" data-board-tile="popular">
+        ${sectionHead("Em evidência", ggBlocked ? "Steam · gg.deals indisponível neste celular" : "loja · capas da Steam", { href: "https://gg.deals/", label: "Abrir gg.deals" })}
+        ${scrollRow(ggCards)}
+      </div>
       <div class="board-tile" data-board-tile="newdeals">
-        ${sectionHead("Ofertas", "Steam store · toque abre o app da Steam", { href: "https://store.steampowered.com/specials/", label: "Especiais Steam" })}
+        ${sectionHead("New deals", "gg.deals · ou ofertas Steam", { href: "https://store.steampowered.com/specials/", label: "Especiais Steam" })}
         ${newDeals}
       </div>
       <div class="board-tile" data-board-tile="bestdeals">
@@ -1373,7 +1463,7 @@
         settings.libraryLists && typeof settings.libraryLists === "object"
           ? settings.libraryLists
           : { lists: [], pins: {} },
-      backlogSort: ["hours", "reviews", "name"].includes(settings.backlogSort) ? settings.backlogSort : "hours",
+      backlogSort: ["hours", "reviews", "name", "recent"].includes(settings.backlogSort) ? settings.backlogSort : "hours",
       timezone: settings.timezone || "America/Sao_Paulo",
       appVersion: APP_VERSION,
       apkUrl: APK_RELEASES_URL,
@@ -1530,16 +1620,44 @@
 
       progress.start("loja");
       let mostWanted = [];
-      let storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [], catalog: [] };
+      let storeHub = { events: [], specials: [], newDeals: [], bestDeals: [], dealsStrip: [], catalog: [], steamLists: {} };
       let ggBlocked = true;
+      const wishIds = new Set((items || []).map((item) => Number(item.appId)));
+      const markWish = (list) =>
+        (list || []).map((game) => ({ ...game, onWishlist: wishIds.has(Number(game.appId)) }));
       try {
-        mostWanted = await fetchSearchCatalog({ limit: 20, params: { filter: "popularwishlist" } });
+        const [popularNew, topSellers, upcoming, specials] = await Promise.all([
+          fetchSearchCatalog({
+            limit: 15,
+            params: { filter: "popularnew", hidef2p: "1", ignore_preferences: "1", sort_by: "Released_DESC", category1: "998" },
+          }),
+          fetchSearchCatalog({ limit: 15, params: { filter: "topsellers", hidef2p: "1", ignore_preferences: "1" } }),
+          fetchSearchCatalog({ limit: 15, params: { filter: "popularcomingsoon", ignore_preferences: "1" } }),
+          fetchSearchCatalog({ limit: 15, params: { specials: "1", hidef2p: "1", ignore_preferences: "1" } }),
+        ]);
+        mostWanted = markWish(upcoming);
+        storeHub.steamLists = {
+          popularNew: markWish(popularNew),
+          topSellers: markWish(topSellers),
+          upcoming: mostWanted,
+          specials: markWish(specials),
+        };
       } catch {
         mostWanted = cache.mostWanted || [];
+        storeHub.steamLists = cache.storeHub?.steamLists || {};
       }
       progress.tick("loja", 1, 3);
       try {
-        storeHub = await fetchStoreHub();
+        const hub = await fetchStoreHub();
+        storeHub = {
+          ...hub,
+          steamLists: {
+            ...(storeHub.steamLists || {}),
+            specials: storeHub.steamLists?.specials?.length
+              ? storeHub.steamLists.specials
+              : markWish((hub.catalog || hub.specials || []).slice(0, 15)),
+          },
+        };
       } catch {
         storeHub = cache.storeHub || storeHub;
       }
@@ -1659,7 +1777,7 @@
       next.libraryLists = partial.libraryLists;
     }
     if (partial.backlogSort != null) {
-      next.backlogSort = ["hours", "reviews", "name"].includes(partial.backlogSort) ? partial.backlogSort : "hours";
+      next.backlogSort = ["hours", "reviews", "name", "recent"].includes(partial.backlogSort) ? partial.backlogSort : "hours";
     }
     if (partial.pcBaseUrl != null) next.pcBaseUrl = normalizePcBase(partial.pcBaseUrl);
     if (partial.pairCode != null) next.pairCode = String(partial.pairCode).replace(/\D/g, "").slice(0, 6);

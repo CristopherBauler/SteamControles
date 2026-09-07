@@ -1185,16 +1185,105 @@ function decodeHtml(text) {
     .trim();
 }
 
-async function fetchMostWanted({ country = "br", language = "portuguese", limit = 20 } = {}) {
+function parseBrlLabel(text) {
+  const m = String(text || "")
+    .replace(/\s/g, "")
+    .match(/(\d{1,3}(?:\.\d{3})*|\d+),(\d{2})/);
+  if (!m) return null;
+  const n = Number(`${m[1].replace(/\./g, "")}.${m[2]}`);
+  return Number.isFinite(n) ? n : null;
+}
+
+let steamTagCache = { at: 0, map: new Map() };
+
+async function loadSteamTagNames(language = "portuguese") {
+  if (steamTagCache.map.size && Date.now() - steamTagCache.at < 6 * 3600 * 1000) {
+    return steamTagCache.map;
+  }
+  const slug = language === "portuguese" || language === "brazilian" ? "brazilian" : "english";
+  try {
+    const rows = await fetchJson(`https://store.steampowered.com/tagdata/populartags/${slug}`);
+    const map = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const id = Number(row?.tagid);
+      const name = String(row?.name || "").trim();
+      if (id > 0 && name) map.set(id, name);
+    }
+    if (map.size) steamTagCache = { at: Date.now(), map };
+    return map;
+  } catch {
+    return steamTagCache.map;
+  }
+}
+
+function jsonIdList(block, attr) {
+  const raw = block.match(new RegExp(`${attr}="(\\[[^\\]]*\\])"`))?.[1];
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw).map(Number).filter((id) => id > 0);
+  } catch {
+    return [];
+  }
+}
+
+const ADULT_DESC_IDS = new Set([1, 3]);
+const ADULT_TAG_IDS = new Set([12095, 6650, 9130, 24904]);
+
+function isAdultStoreRow(block) {
+  const descs = jsonIdList(block, "data-ds-descids");
+  if (descs.some((id) => ADULT_DESC_IDS.has(id))) return true;
+  const tags = jsonIdList(block, "data-ds-tagids");
+  return tags.some((id) => ADULT_TAG_IDS.has(id));
+}
+
+function tagsFromBlock(block, tagNames) {
+  if (!tagNames || typeof tagNames.get !== "function") return [];
+  const names = [];
+  for (const id of jsonIdList(block, "data-ds-tagids")) {
+    const name = tagNames.get(id);
+    if (name && !names.includes(name)) names.push(name);
+    if (names.length >= 3) break;
+  }
+  return names;
+}
+
+async function fetchMostWanted({ country = "br", language = "portuguese", limit = 20, tagNames } = {}) {
   return fetchSearchCatalog({
     country,
     language,
     limit,
-    params: { filter: "popularwishlist" },
+    tagNames,
+    skipAdult: true,
+    params: { filter: "popularwishlist", ignore_preferences: "1" },
   });
 }
 
-function parseSearchCatalog(html, limit) {
+async function fetchSteamStoreLists({ country = "br", language = "portuguese", limit = 15, tagNames } = {}) {
+  const names = tagNames || (await loadSteamTagNames(language));
+  const opts = { country, language, limit, tagNames: names, skipAdult: true };
+  const shared = { ignore_preferences: "1" };
+  const [popularNew, topSellers, upcoming, specials] = await Promise.all([
+    fetchSearchCatalog({
+      ...opts,
+      params: { ...shared, filter: "popularnew", hidef2p: "1", sort_by: "Released_DESC", category1: "998" },
+    }),
+    fetchSearchCatalog({
+      ...opts,
+      params: { ...shared, filter: "topsellers", hidef2p: "1" },
+    }),
+    fetchSearchCatalog({
+      ...opts,
+      params: { ...shared, filter: "popularcomingsoon" },
+    }),
+    fetchSearchCatalog({
+      ...opts,
+      params: { ...shared, specials: "1", hidef2p: "1" },
+    }),
+  ]);
+  return { popularNew, topSellers, upcoming, specials, tagNames: names };
+}
+
+function parseSearchCatalog(html, limit, tagNames, { skipAdult = false } = {}) {
   const blocks = String(html || "").split(/data-ds-appid="/).slice(1);
   const seen = new Set();
   const games = [];
@@ -1202,6 +1291,7 @@ function parseSearchCatalog(html, limit) {
   for (const block of blocks) {
     const appId = Number(block.match(/^(\d+)/)?.[1]);
     if (!Number.isInteger(appId) || appId <= 0 || seen.has(appId)) continue;
+    if (skipAdult && isAdultStoreRow(block)) continue;
     seen.add(appId);
     const name =
       block.match(/<span class="title">([^<]+)/)?.[1] ||
@@ -1214,19 +1304,30 @@ function parseSearchCatalog(html, limit) {
       "";
     const cents = Number(block.match(/data-price-final="(\d+)"/)?.[1] || 0);
     const discount = Number(
-      block.match(/discount_pct[^>]*>\s*-?(\d+)\s*%/)?.[1] ||
-        block.match(/-(\d+)\s*%/)?.[1] ||
+      block.match(/data-discount="(\d+)"/)?.[1] ||
+        block.match(/discount_pct[^>]*>\s*-?(\d+)\s*%/)?.[1] ||
         0
     );
+    const isFree = /discount_final_price\s+free|>Grátis</i.test(block);
+    const originalLabel = decodeHtml(block.match(/discount_original_price">([^<]+)/)?.[1] || "");
+    const finalLabel = decodeHtml(block.match(/discount_final_price[^>]*>([^<]+)/)?.[1] || "");
+    const releaseDate = decodeHtml(block.match(/search_released[^>]*>\s*([^<]+)/)?.[1] || "");
+    const currentPrice = isFree ? 0 : cents > 0 ? centsToReais(cents) : parseBrlLabel(finalLabel);
     games.push({
       rank: games.length + 1,
       appId,
       name: decodeHtml(name),
       image,
       headerImage: image,
-      currentPrice: cents > 0 ? centsToReais(cents) : null,
+      currentPrice,
+      originalPrice: parseBrlLabel(originalLabel),
+      originalPriceLabel: originalLabel,
+      priceLabel: isFree ? "Grátis" : finalLabel,
       discount,
-      status: "igual",
+      isFree,
+      releaseDate,
+      tags: tagsFromBlock(block, tagNames),
+      status: discount > 0 || isFree ? "queda" : "igual",
       ggDealsUrl: `https://gg.deals/steam/app/${appId}/`,
       storeUrl: `https://store.steampowered.com/app/${appId}`,
       source: "Steam",
@@ -1242,10 +1343,13 @@ async function fetchSearchCatalog({
   limit = 20,
   start = 0,
   params = {},
+  tagNames,
+  skipAdult = false,
 } = {}) {
   const url = new URL("https://store.steampowered.com/search/results/");
+  const fetchCount = skipAdult ? Math.min(100, Math.max(limit * 3, 40)) : limit;
   url.searchParams.set("start", String(start));
-  url.searchParams.set("count", String(limit));
+  url.searchParams.set("count", String(fetchCount));
   url.searchParams.set("infinite", "1");
   url.searchParams.set("cc", country);
   url.searchParams.set("l", language);
@@ -1253,10 +1357,11 @@ async function fetchSearchCatalog({
     url.searchParams.set(key, String(value));
   }
   const payload = await fetchJson(url);
-  return parseSearchCatalog(payload?.results_html || "", limit);
+  const games = parseSearchCatalog(payload?.results_html || "", fetchCount, tagNames, { skipAdult });
+  return games.slice(0, limit).map((game, index) => ({ ...game, rank: index + 1 }));
 }
 
-async function fetchSpecialsCatalog({ country = "br", language = "portuguese", limit = 80 } = {}) {
+async function fetchSpecialsCatalog({ country = "br", language = "portuguese", limit = 80, tagNames } = {}) {
   const pageSize = 50;
   const games = [];
   const seen = new Set();
@@ -1267,6 +1372,7 @@ async function fetchSpecialsCatalog({ country = "br", language = "portuguese", l
       language,
       limit: take,
       start,
+      tagNames,
       params: { specials: "1" },
     });
     if (!page.length) break;
@@ -1296,7 +1402,7 @@ function mapStoreItem(item, source = "Steam") {
   };
 }
 
-async function fetchStoreHub({ country = "br", language = "portuguese" } = {}) {
+async function fetchStoreHub({ country = "br", language = "portuguese", tagNames } = {}) {
   const url = new URL("https://store.steampowered.com/api/featuredcategories");
   url.searchParams.set("cc", country);
   url.searchParams.set("l", language);
@@ -1325,7 +1431,7 @@ async function fetchStoreHub({ country = "br", language = "portuguese" } = {}) {
 
   let catalog = [];
   try {
-    catalog = await fetchSpecialsCatalog({ country, language, limit: 80 });
+    catalog = await fetchSpecialsCatalog({ country, language, limit: 80, tagNames });
   } catch {
     catalog = [];
   }
@@ -1348,6 +1454,7 @@ async function fetchStoreHub({ country = "br", language = "portuguese" } = {}) {
   return {
     events,
     specials: specials.slice(0, 12),
+    catalog,
     newDeals: [],
     bestDeals: [],
     dealsStrip,
@@ -1396,6 +1503,8 @@ module.exports = {
   fetchOwnedGames,
   fetchOwnedPlaytimes,
   fetchMostWanted,
+  fetchSteamStoreLists,
+  loadSteamTagNames,
   fetchSpecialsCatalog,
   fetchStoreHub,
   searchSteamStore,

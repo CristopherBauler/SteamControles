@@ -17,12 +17,15 @@ process.env.STEAM_CONTROLES_HOME = app.isPackaged
   ? app.getPath("userData")
   : path.resolve(__dirname, "..");
 
-const { loadConfig, readJson, writeJson, CONFIG_PATH, DEFAULT_CONFIG, normalizeTheme, formatBRL } = require("../Scripts/config");
+const { loadConfig, readJson, writeJson, CONFIG_PATH, DEFAULT_CONFIG, normalizeTheme, normalizeBacklogSort, formatBRL } = require("../Scripts/config");
 const { run } = require("../Scripts/updateWishlist");
 const { loginWithSteam } = require("../Scripts/steamLogin");
 const { isUnreleased, updatesBanner, storePageHtml } = require("../Scripts/dashboard");
 const { detectEarlyAccess } = require("../Scripts/steamApi");
-const { loadLibraryLists, toggleSkipped, fillLibraryReviews } = require("../Scripts/backlog");
+const { loadLibraryLists, toggleSkipped, fillLibraryReviews, refreshBacklog } = require("../Scripts/backlog");
+const { fetchEpicOwned } = require("../Scripts/epicApi");
+const { loginWithEpic } = require("./epicLogin");
+const { decorateUpdateNames, resolveUpdateNames, isBareName } = require("../Scripts/wishlistUpdates");
 const { startPhoneLink, stopPhoneLink, restorePhoneLink, getPhoneLinkStatus } = require("./phoneLink");
 const { setHtmlFetcher } = require("../Scripts/ggDeals");
 const { fetchHtml } = require("./browserFetch");
@@ -50,6 +53,37 @@ let lastSyncAt = null;
 let lastStoreAt = null;
 let nextSyncAt = null;
 let libraryReviewJob = null;
+let updateNameJob = null;
+let updateNameTried = false;
+
+function kickUpdateNames(config, events, extraGames = []) {
+  if (updateNameJob || updateNameTried) return;
+  const pending = [
+    ...(events || []).filter((event) => isBareName(event.name)),
+    ...(extraGames || []).filter((game) => isBareName(game.name)),
+  ];
+  if (!pending.length) return;
+  updateNameTried = true;
+  updateNameJob = resolveUpdateNames(events, {
+    paths: config.paths,
+    country: config.country,
+    language: config.language,
+    extraGames,
+  })
+    .then(async (result) => {
+      if (!result.fetched) return;
+      const stored = await readJson(config.paths.wishlistUpdates, { events: [] });
+      stored.events = decorateUpdateNames(stored.events || [], result.nameMap);
+      await writeJson(config.paths.wishlistUpdates, stored);
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const state = await getState();
+      mainWindow.webContents.send("sync-status", { syncing: false, state });
+    })
+    .catch(() => {})
+    .finally(() => {
+      updateNameJob = null;
+    });
+}
 
 function kickLibraryReviews(config, library) {
   if (libraryReviewJob) return;
@@ -274,19 +308,26 @@ function shortcutSpec() {
   const root = PROJECT_ROOT;
   const icon = shortcutIconPath();
   if (app.isPackaged) {
+    const portable = process.env.PORTABLE_EXECUTABLE_FILE;
+    const target = portable && fs.existsSync(portable) ? portable : process.execPath;
     return {
-      target: process.execPath,
+      target,
       args: "",
-      cwd: path.dirname(process.execPath),
+      cwd: path.dirname(target),
       icon,
     };
   }
-  const distExe = path.join(root, "dist", "SteamControles.exe");
   const electronExe = path.join(root, "node_modules", "electron", "dist", "electron.exe");
+  const distExe = path.join(root, "dist", "SteamControles.exe");
   const cmd = path.join(root, "SteamControles.cmd");
   const vbs = path.join(root, "SteamControles.vbs");
-  if (fs.existsSync(distExe)) {
-    return { target: distExe, args: "", cwd: root, icon };
+  if (fs.existsSync(electronExe)) {
+    return {
+      target: electronExe,
+      args: `"${root}"`,
+      cwd: root,
+      icon,
+    };
   }
   if (fs.existsSync(cmd)) {
     return { target: cmd, args: "", cwd: root, icon };
@@ -295,8 +336,8 @@ function shortcutSpec() {
     return { target: vbs, args: "", cwd: root, icon };
   }
   return {
-    target: electronExe,
-    args: `"${root}"`,
+    target: distExe,
+    args: "",
     cwd: root,
     icon,
   };
@@ -338,7 +379,7 @@ async function createAppShortcuts() {
   if (!spec.target || !fs.existsSync(spec.target)) {
     return {
       ok: false,
-      message: `Não achei o SteamControles.exe nem o launcher. Rode npm run app:build ou npm install.`,
+      message: `Não achei o Electron nesta pasta. Rode npm install.`,
     };
   }
   const desktop = path.join(app.getPath("desktop"), `${APP_TITLE}.lnk`);
@@ -529,11 +570,23 @@ async function getState() {
   const library = await loadLibraryLists(config);
   kickLibraryReviews(config, library);
   const games = (wishlist.games || []).filter((game) => game.onWishlist !== false);
+  const namesCache = await readJson(path.join(config.paths.data, "appNames.json"), { names: {} });
+  const nameMap = {};
+  for (const [id, hit] of Object.entries(namesCache.names || {})) {
+    const value = typeof hit === "string" ? hit : hit?.name;
+    if (value && !isBareName(value)) nameMap[String(id)] = value;
+  }
+  for (const game of games) {
+    if (game.name && !isBareName(game.name)) nameMap[String(game.appId)] = game.name;
+  }
+  const namedEvents = decorateUpdateNames(updates.events || [], nameMap);
+  kickUpdateNames(config, namedEvents, games);
   const wishAll = games.map((game) => {
     const unreleased = isUnreleased(game);
+    const name = nameMap[String(game.appId)] || game.name;
     return {
       appId: game.appId,
-      name: game.name,
+      name,
       headerImage: game.headerImage,
       currentPrice: game.currentPrice,
       discount: Number(game.discount) || 0,
@@ -555,6 +608,8 @@ async function getState() {
     profileUrl: config.profileUrl,
     steamWebApiKey: config.steamWebApiKey ? "••••" : "",
     hasApiKey: Boolean(config.steamWebApiKey),
+    epicDisplayName: config.epicDisplayName || "",
+    hasEpic: Boolean(config.epicRefreshToken || config.epicDisplayName),
     syncEveryHours: config.syncEveryHours,
     startWithWindows: config.startWithWindows,
     notifySales: config.notifySales,
@@ -563,7 +618,7 @@ async function getState() {
     layout: config.layout && typeof config.layout === "object" ? config.layout : {},
     libraryLists:
       config.libraryLists && typeof config.libraryLists === "object" ? config.libraryLists : { lists: [], pins: {} },
-    backlogSort: ["hours", "reviews", "name"].includes(config.backlogSort) ? config.backlogSort : "hours",
+    backlogSort: normalizeBacklogSort(config.backlogSort),
     timezone: config.timezone || "America/Sao_Paulo",
     appVersion: APP_VERSION,
     apkUrl: APK_RELEASES_URL,
@@ -586,7 +641,7 @@ async function getState() {
     libraryGames: library.open,
     skippedGames: library.done,
     libraryMeta: library.meta,
-    novidadesHtml: updatesBanner(updates.events || [], config.timezone),
+    novidadesHtml: updatesBanner(namedEvents, config.timezone),
     lojaHtml: storePageHtml({
       mostWanted: mostWanted.games || [],
       ggPopular: ggPopular.games || [],
@@ -632,6 +687,9 @@ async function saveSettings(partial) {
   if (partial.steamWebApiKey != null && partial.steamWebApiKey !== "••••") {
     next.steamWebApiKey = String(partial.steamWebApiKey).trim();
   }
+  if (partial.epicRefreshToken != null) next.epicRefreshToken = String(partial.epicRefreshToken).trim();
+  if (partial.epicAccountId != null) next.epicAccountId = String(partial.epicAccountId).trim();
+  if (partial.epicDisplayName != null) next.epicDisplayName = String(partial.epicDisplayName).trim();
   if (partial.syncEveryHours != null) next.syncEveryHours = Number(partial.syncEveryHours) || 12;
   if (partial.startWithWindows != null) next.startWithWindows = Boolean(partial.startWithWindows);
   if (partial.notifySales != null) next.notifySales = Boolean(partial.notifySales);
@@ -650,7 +708,7 @@ async function saveSettings(partial) {
     next.libraryLists = partial.libraryLists;
   }
   if (partial.backlogSort != null) {
-    next.backlogSort = ["hours", "reviews", "name"].includes(partial.backlogSort) ? partial.backlogSort : "hours";
+    next.backlogSort = normalizeBacklogSort(partial.backlogSort);
   }
   if (!app.isPackaged) {
     // keep vault paths when running from the repo
@@ -816,6 +874,29 @@ ipcMain.handle("steam-login", async () => {
   const steamId = await loginWithSteam();
   return saveSettings({ steamId });
 });
+ipcMain.handle("epic-login", async (_event, opts = {}) => {
+  const session = await loginWithEpic(mainWindow, opts || {});
+  await saveSettings({
+    epicRefreshToken: session.refresh_token || "",
+    epicAccountId: session.account_id || "",
+    epicDisplayName: session.displayName || session.display_name || "",
+  });
+  if (!syncing) {
+    syncing = true;
+    rebuildTray();
+    try {
+      const config = await loadConfig();
+      await refreshBacklog({ config });
+    } finally {
+      syncing = false;
+      rebuildTray();
+    }
+  }
+  return getState();
+});
+ipcMain.handle("epic-logout", () =>
+  saveSettings({ epicRefreshToken: "", epicAccountId: "", epicDisplayName: "" })
+);
 ipcMain.handle("logout", () => saveSettings({ steamId: "", profileUrl: "" }));
 ipcMain.handle("sync-now", () => syncNow({ manual: true, scope: "full" }));
 ipcMain.handle("sync-store", () => syncNow({ manual: true, scope: "store" }));
@@ -879,6 +960,9 @@ ipcMain.handle("import-backup", async () => {
     libraryLists: raw.libraryLists,
     backlogSort: raw.backlogSort,
     ...(raw.steamWebApiKey ? { steamWebApiKey: raw.steamWebApiKey } : {}),
+    ...(raw.epicRefreshToken ? { epicRefreshToken: raw.epicRefreshToken } : {}),
+    ...(raw.epicAccountId ? { epicAccountId: raw.epicAccountId } : {}),
+    ...(raw.epicDisplayName ? { epicDisplayName: raw.epicDisplayName } : {}),
   });
   return { ok: true, skipped: applied.skipped };
 });
@@ -909,7 +993,7 @@ if (!gotLock) {
     setHtmlFetcher(fetchHtml);
     ensureWindowsIcon();
     diskIconPath = materializeIconFile();
-    await createAppShortcuts().catch(() => {});
+    if (!app.isPackaged) await createAppShortcuts().catch(() => {});
     createWindow();
     createTray();
     const config = await loadConfig();
@@ -923,6 +1007,15 @@ if (!gotLock) {
     applyOpenAtLogin(hydrated.startWithWindows);
     scheduleSync(hydrated.syncEveryHours);
     restorePhoneLink(getStateForPhone, applyPhoneSkip).catch(() => {});
+    if (!hydrated.epicRefreshToken) {
+      fetchEpicOwned(hydrated)
+        .then(async (epic) => {
+          if (!epic?.games?.length || !mainWindow || mainWindow.isDestroyed()) return;
+          const state = await getState();
+          mainWindow.webContents.send("sync-status", { syncing: false, state });
+        })
+        .catch(() => {});
+    }
     if (hydrated.steamId || hydrated.profileUrl) {
       setTimeout(() => syncNow({ manual: false, scope: "full" }).catch(() => {}), 8000);
     }
