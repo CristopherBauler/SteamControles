@@ -27,6 +27,10 @@ const BACKLOG_SORT_KEY = "mld.backlogSort";
 let backlogSort = "hours";
 let savedTheme = { ...DEFAULT_THEME, tabs: { ...DEFAULT_THEME.tabs } };
 let themeDirty = false;
+let libraryPaintDirty = true;
+let skippedPaintDirty = true;
+let jogosSearchTimer = 0;
+let backlogSearchTimer = 0;
 
 function hexToRgb(hex) {
   const raw = String(hex || "").replace("#", "").trim();
@@ -265,6 +269,8 @@ function showTab(tab) {
     const panel = $(`tab-${id}`);
     if (panel) panel.classList.toggle("hidden", id !== activeTab);
   });
+  if (activeTab === "jogos" && libraryPaintDirty) paintLibrary();
+  if (activeTab === "backlog" && skippedPaintDirty) paintSkipped();
 }
 
 function setWishFilter(filter) {
@@ -343,21 +349,46 @@ function groupByHours(games) {
   }).filter((shelf) => shelf.items.length);
 }
 
+function shrinkEpicCoverUrl(url) {
+  const src = String(url || "").trim();
+  if (!src || !/^https?:\/\//i.test(src)) return src;
+  try {
+    const parsed = new URL(src);
+    if (!/(?:^|\.)(?:epicgames|unrealengine)\.com$/i.test(parsed.hostname)) return src;
+    const currentW = Number(parsed.searchParams.get("w")) || 0;
+    const currentH = Number(parsed.searchParams.get("h")) || 0;
+    const resized = parsed.searchParams.get("resize") === "1";
+    if (resized && currentW > 0 && currentW <= 480 && (currentH === 0 || currentH <= 180)) return src;
+    parsed.searchParams.set("resize", "1");
+    parsed.searchParams.set("w", "480");
+    parsed.searchParams.set("h", "180");
+    return parsed.toString();
+  } catch {
+    return src;
+  }
+}
+
+function isEpicCoverUrl(url) {
+  try {
+    return /(?:^|\.)(?:epicgames|unrealengine)\.com$/i.test(new URL(String(url || "")).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function libCoverList(game) {
   const id = Number(game.appId);
   const list = [];
   const push = (url) => {
-    const src = String(url || "").trim();
-    if (!src || /library_hero/i.test(src) || list.includes(src)) return;
+    const src = shrinkEpicCoverUrl(url);
+    if (!src || /library_hero/i.test(src) || list.includes(src) || list.length >= 2) return;
     list.push(src);
   };
   push(game.cover);
   if (Array.isArray(game.covers)) game.covers.forEach(push);
   if (game.store !== "epic" && Number.isInteger(id) && id > 0 && id < 2100000000) {
     push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/capsule_231x87.jpg`);
-    push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`);
     push(`https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`);
-    push(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`);
   }
   return list;
 }
@@ -380,6 +411,13 @@ function dealCoverError(img) {
 window.dealCoverError = dealCoverError;
 
 function libCoverError(img) {
+  if (isEpicCoverUrl(img.getAttribute("src"))) {
+    const ph = document.createElement("span");
+    ph.className = "lib-cover-empty";
+    ph.setAttribute("aria-hidden", "true");
+    img.replaceWith(ph);
+    return;
+  }
   const next = String(img.dataset.covers || "")
     .split("|")
     .map((url) => url.trim())
@@ -411,8 +449,10 @@ function libCard(game, skipped) {
       ? `<button type="button" class="lib-unpin" data-unpin="${esc(game.appId)}" title="Devolver à faixa de horas">↩</button>`
       : "";
   const covers = libCoverList(game);
+  const imgW = skipped ? 184 : 132;
+  const imgH = skipped ? 69 : 50;
   const img = covers.length
-    ? `<img src="${esc(covers[0])}" alt="" draggable="false" loading="lazy" data-covers="${esc(covers.slice(1).join("|"))}" onerror="libCoverError(this)">`
+    ? `<img src="${esc(covers[0])}" alt="" width="${imgW}" height="${imgH}" draggable="false" loading="lazy" decoding="async" data-covers="${esc(covers.slice(1).join("|"))}" onerror="libCoverError(this)">`
     : `<span class="lib-cover-empty" aria-hidden="true"></span>`;
   const link = `<a class="lib-link" href="${esc(game.storeUrl || "#")}" draggable="false">${img}<span class="lib-name" title="${esc(game.name || "")}">${esc(game.name || "")}</span></a>`;
   if (skipped) {
@@ -534,6 +574,7 @@ function epicCtaHtml() {
 }
 
 function paintLibrary() {
+  libraryPaintDirty = false;
   const query = normalizeQuery($("jogosSearch")?.value);
   const list = libraryGames.filter((game) => nameMatches(game.name, query));
   const shelves = window.libraryBoard?.group ? window.libraryBoard.group(list) : groupByHours(list);
@@ -592,6 +633,7 @@ function applyBacklogSort(sort, persist) {
 }
 
 function paintSkipped() {
+  skippedPaintDirty = false;
   const query = normalizeQuery($("backlogSearch")?.value);
   const filtered = skippedGames.filter((game) => nameMatches(game.name, query));
   const list = window.libraryBoard?.sortItems ? window.libraryBoard.sortItems(filtered, backlogSort) : filtered;
@@ -832,8 +874,10 @@ function render(state) {
   epicSession = readEpicSession(state);
   paintTabCounts();
   paintGames();
-  paintLibrary();
-  paintSkipped();
+  if (activeTab === "jogos") paintLibrary();
+  else libraryPaintDirty = true;
+  if (activeTab === "backlog") paintSkipped();
+  else skippedPaintDirty = true;
   paintBoards();
 }
 
@@ -1030,8 +1074,14 @@ if ($("btnDownloadApk")) {
   };
 }
 $("search").oninput = () => paintGames();
-$("jogosSearch").oninput = () => paintLibrary();
-$("backlogSearch").oninput = () => paintSkipped();
+$("jogosSearch").oninput = () => {
+  clearTimeout(jogosSearchTimer);
+  jogosSearchTimer = setTimeout(() => paintLibrary(), 160);
+};
+$("backlogSearch").oninput = () => {
+  clearTimeout(backlogSearchTimer);
+  backlogSearchTimer = setTimeout(() => paintSkipped(), 160);
+};
 if ($("backlogSort")) {
   $("backlogSort").onchange = () => {
     applyBacklogSort($("backlogSort").value, true);

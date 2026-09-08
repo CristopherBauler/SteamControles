@@ -24,7 +24,7 @@
 <body>
   <h1>Minha Loja dos Desejos</h1>
   <p class="meta">
-    Manual técnico passo a passo · versão do documento 2026-09-01 ·
+    Manual técnico passo a passo · versão do documento 2026-09-07 ·
     regenerar com <code>npm run docs:pdf</code> · fonte: <code>Docs/como-o-app-foi-feito.html</code>
   </p>
 
@@ -136,6 +136,7 @@
     <li><b>Loja Steam</b> (listas da loja + hub / descontos): junto com o sync da wishlist (6 / 12 / 24 h) e no <b>Atualizar agora</b>. Sem timer de 30 min.</li>
     <li><b>gg.deals</b> (Chromium + Cloudflare): <b>só</b> no <b>Atualizar agora</b>. O sync automático não abre o site, para não tomar bloqueio. Se o scrape falhar, a UI mostra o último ranking e pede para tentar de novo no botão.</li>
     <li>Wishlist + Novidades + Jogos/backlog: o que o usuário escolhe em Ajustes (6 / 12 / 24 h). No PC isso é o timer da bandeja. No celular vale ao reabrir o app ou tocar Atualizar. Os dois intervalos são independentes.</li>
+    <li>Catálogo Epic (nomes e capas): no sync, a API de catálogo só roda para jogos que ainda não têm título real ou capa em <code>epicLibrary.json</code>. Abrir a janela (<code>getState</code>) lê o JSON e o cache de capas; não faz HEAD na rede. URLs da CDN Epic recebem <code>?resize=1&amp;w=480&amp;h=180</code> na hora de pintar o card (sem refetch do catálogo): o arquivo original costuma ser 1920–2560 px.</li>
     <li><b>Atualizar agora</b>: sync completo (se estiver logado). Inclui Loja Steam e o scrape do gg.deals.</li>
     <li>Bug antigo: o scrape do gg.deals era cacheado para sempre no processo Electron. Um “atualizar” não relia o site. Isso foi removido.</li>
   </ul>
@@ -167,6 +168,8 @@ mobile/                     Capacitor (fase seguinte ao PC)</pre>
 
   <h2>9. Histórico deste documento</h2>
   <ul>
+    <li>2026-09-07 — Jogos/Epic: capas da CDN pedem resize 480×180 no card (o JSON antigo continua com o arquivo 2560 px; não precisa Atualizar agora). Cards da biblioteca usam <code>content-visibility: auto</code>.</li>
+    <li>2026-09-07 — Jogos/Epic: catálogo só enriquece o que ainda não tem nome/capa em <code>epicLibrary.json</code>; <code>getState</code> não resolve capas na rede; o IPC manda no máximo 2 URLs de capa; a UI não reconstrói Jogos/Não vou jogar se a aba não está aberta.</li>
     <li>2026-09-06 — Com o launcher da Epic já conectado, Jogos pede autorização e reutiliza a sessão RememberMe (pode derrubar o login do launcher se ele ficar aberto). Entrar no site continua como alternativa.</li>
     <li>2026-09-06 — Biblioteca Epic completa exige Entrar na Epic (Ajustes ou botão na aba Jogos); sem login só os instalados neste PC. library-service + catálogo; DLC/UE de fora.</li>
     <li>2026-09-06 — Jogos/Backlog também leem a Epic: instalados neste PC sem login; biblioteca completa com Entrar na Epic (Ajustes). Selo Epic no card; sem horas (a loja não entrega playtime).</li>

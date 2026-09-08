@@ -7,7 +7,7 @@ const fs = require("fs/promises");
 const path = require("path");
 const { readJson, writeJson, nowIso, CONFIG_PATH } = require("./config");
 const { fetchOwnedPlaytimes, fetchAppDetails, fetchReviews, mapPool } = require("./steamApi");
-const { fetchEpicOwned, isEpicGame, probeEglSession, isEpicPlaceholderName, epicCoverFallbacks } = require("./epicApi");
+const { fetchEpicOwned, isEpicGame, probeEglSession, isEpicPlaceholderName, epicCoverFallbacks, shrinkEpicCoverUrl } = require("./epicApi");
 
 const NAME_RESOLVE_LIMIT = 15;
 const REVIEW_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -109,7 +109,8 @@ function coverCandidates(game, cached) {
   const id = Number(game.appId);
   const list = [];
   const push = (url) => {
-    if (url && !isBannedCover(url)) list.push(url);
+    const src = shrinkEpicCoverUrl(url);
+    if (src && !isBannedCover(src)) list.push(src);
   };
   push(cached);
   push(game?.cover);
@@ -126,7 +127,7 @@ function coverCandidates(game, cached) {
     push(`https://media.steampowered.com/steamcommunity/public/images/apps/${id}/${game.logoHash}.jpg`);
   }
   if (isCommunityLogo(game?.logo)) push(game.logo);
-  if (isEpicGame(game)) {
+  if (isEpicGame(game) && !list.length) {
     for (const url of epicCoverFallbacks({
       namespace: game.epicNamespace || game.namespace,
       catalogItemId: game.epicId || game.catalogItemId,
@@ -586,8 +587,8 @@ function splitBacklog(games, doneIds, snapshots) {
 }
 
 function coverUrl(game) {
-  if (game.cover && !isBannedCover(game.cover)) return game.cover;
-  if (game.coverUrl && !isBannedCover(game.coverUrl)) return game.coverUrl;
+  if (game.cover && !isBannedCover(game.cover)) return shrinkEpicCoverUrl(game.cover);
+  if (game.coverUrl && !isBannedCover(game.coverUrl)) return shrinkEpicCoverUrl(game.coverUrl);
   if (isCommunityLogo(game.logo)) return game.logo;
   return "";
 }
@@ -1033,9 +1034,11 @@ async function fillLibraryReviews(config, games, options = {}) {
   return changed;
 }
 
+const PUBLIC_COVER_LIMIT = 2;
+
 function publicGame(game) {
   const id = Number(game.appId);
-  const covers = coverCandidates(game, coverUrl(game));
+  const covers = coverCandidates(game, coverUrl(game)).slice(0, PUBLIC_COVER_LIMIT);
   const epic = isEpicGame(game);
   return {
     appId: id,
@@ -1083,11 +1086,6 @@ async function loadLibraryLists(config) {
   const coverPath = path.join(paths.data, "backlogCovers.json");
   const all = [...open, ...done];
   attachCachedCovers(all, readCoverMap(await readJson(coverPath, {})));
-  const missing = all.filter((game) => !coverUrl(game));
-  if (missing.length) {
-    await resolveCovers(missing, coverPath, config);
-    attachCachedCovers(all, readCoverMap(await readJson(coverPath, {})));
-  }
   attachReviews(all, await readJson(paths.libraryReviews, { games: {} }));
   const egl = probeEglSession();
   return {

@@ -908,18 +908,37 @@
     return JUNK_NAME.test(String(game.name || ""));
   }
 
+  function shrinkEpicCoverUrl(url) {
+    const src = String(url || "").trim();
+    if (!src || !/^https?:\/\//i.test(src)) return src;
+    try {
+      const parsed = new URL(src);
+      if (!/(?:^|\.)(?:epicgames|unrealengine)\.com$/i.test(parsed.hostname)) return src;
+      const currentW = Number(parsed.searchParams.get("w")) || 0;
+      const currentH = Number(parsed.searchParams.get("h")) || 0;
+      const resized = parsed.searchParams.get("resize") === "1";
+      if (resized && currentW > 0 && currentW <= 480 && (currentH === 0 || currentH <= 180)) return src;
+      parsed.searchParams.set("resize", "1");
+      parsed.searchParams.set("w", "480");
+      parsed.searchParams.set("h", "180");
+      return parsed.toString();
+    } catch {
+      return src;
+    }
+  }
+
   function publicGame(game) {
     const id = Number(game.appId);
     const epic = isEpicGame(game);
     const cover = epic
-      ? game.cover || game.coverUrl || ""
+      ? shrinkEpicCoverUrl(game.cover || game.coverUrl || "")
       : `https://cdn.akamai.steamstatic.com/steam/apps/${id}/capsule_231x87.jpg`;
     return {
       appId: id,
       name: game.name || `App ${id}`,
       cover,
       covers: epic
-        ? [game.cover, game.coverUrl, ...(Array.isArray(game.covers) ? game.covers : [])].filter(Boolean)
+        ? [...new Set([cover, shrinkEpicCoverUrl(game.coverUrl || ""), ...(Array.isArray(game.covers) ? game.covers.map(shrinkEpicCoverUrl) : [])].filter(Boolean))].slice(0, 2)
         : [
             cover,
             `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`,

@@ -127,6 +127,34 @@ function collectKeyImages(meta) {
   return out;
 }
 
+const EPIC_CARD_W = 480;
+const EPIC_CARD_H = 180;
+
+function isEpicCdnHost(host) {
+  return /(?:^|\.)(?:epicgames|unrealengine)\.com$/i.test(String(host || ""));
+}
+
+function shrinkEpicCoverUrl(url) {
+  const src = String(url || "").trim();
+  if (!src || !/^https?:\/\//i.test(src)) return src;
+  try {
+    const parsed = new URL(src);
+    if (!isEpicCdnHost(parsed.hostname)) return src;
+    const currentW = Number(parsed.searchParams.get("w")) || 0;
+    const currentH = Number(parsed.searchParams.get("h")) || 0;
+    const resized = parsed.searchParams.get("resize") === "1";
+    if (resized && currentW > 0 && currentW <= EPIC_CARD_W && (currentH === 0 || currentH <= EPIC_CARD_H)) {
+      return src;
+    }
+    parsed.searchParams.set("resize", "1");
+    parsed.searchParams.set("w", String(EPIC_CARD_W));
+    parsed.searchParams.set("h", String(EPIC_CARD_H));
+    return parsed.toString();
+  } catch {
+    return src;
+  }
+}
+
 function pickCover(images) {
   if (!Array.isArray(images) || !images.length) return "";
   const rank = [
@@ -142,10 +170,10 @@ function pickCover(images) {
   ];
   for (const type of rank) {
     const hit = images.find((item) => String(item?.type || "") === type && item?.url);
-    if (hit?.url) return hit.url;
+    if (hit?.url) return shrinkEpicCoverUrl(hit.url);
   }
   const any = images.find((item) => item?.url);
-  return any?.url || "";
+  return any?.url ? shrinkEpicCoverUrl(any.url) : "";
 }
 
 function epicCoverFallbacks({ namespace, catalogItemId } = {}) {
@@ -164,7 +192,7 @@ function catalogCover(meta, draft = {}) {
   return (
     pickCover(collectKeyImages(meta)) ||
     pickCover(draft.keyImages) ||
-    String(draft.cover || "").trim() ||
+    shrinkEpicCoverUrl(String(draft.cover || "").trim()) ||
     ""
   );
 }
@@ -203,6 +231,7 @@ function isEpicJunk(name, meta, item = {}) {
 }
 
 function toOwnedRow({ appId, name, cover, storeUrl, catalogItemId, namespace, appName }) {
+  const art = shrinkEpicCoverUrl(cover);
   return {
     appId,
     name,
@@ -213,8 +242,8 @@ function toOwnedRow({ appId, name, cover, storeUrl, catalogItemId, namespace, ap
     family: false,
     store: "epic",
     storeUrl,
-    cover,
-    coverUrl: cover,
+    cover: art,
+    coverUrl: art,
     epicId: catalogItemId,
     epicNamespace: namespace,
     epicAppName: appName,
@@ -581,11 +610,10 @@ async function enrichDrafts(drafts, accessToken) {
   return ready;
 }
 
-async function loadIdMap(paths) {
-  const stored = await readJson(paths.epicLibrary, { games: [] });
+function idMapFromStored(stored) {
   const byCatalog = new Map();
   const used = new Set();
-  for (const game of stored.games || []) {
+  for (const game of stored?.games || []) {
     const catalogItemId = String(game.epicId || game.catalogItemId || "").trim();
     const appId = Number(game.appId);
     if (!catalogItemId || !isEpicAppId(appId)) continue;
@@ -593,6 +621,36 @@ async function loadIdMap(paths) {
     used.add(appId);
   }
   return { byCatalog, used };
+}
+
+async function loadIdMap(paths) {
+  const stored = paths?.epicLibrary ? await readJson(paths.epicLibrary, { games: [] }) : { games: [] };
+  return idMapFromStored(stored);
+}
+
+function applyStoredDraftMeta(drafts, storedGames) {
+  const byCatalog = new Map();
+  for (const game of storedGames || []) {
+    const key = String(game.epicId || game.catalogItemId || "").trim().toLowerCase();
+    if (!key) continue;
+    byCatalog.set(key, game);
+  }
+  if (!byCatalog.size) return;
+  for (const draft of drafts.values()) {
+    const hit = byCatalog.get(String(draft.catalogItemId || "").toLowerCase());
+    if (!hit) continue;
+    if (!isRealEpicTitle(draft.name) && isRealEpicTitle(hit.name)) draft.name = hit.name;
+    if (!String(draft.cover || "").trim()) {
+      const cover = hit.cover || hit.coverUrl || "";
+      if (cover) draft.cover = shrinkEpicCoverUrl(cover);
+    } else {
+      draft.cover = shrinkEpicCoverUrl(draft.cover);
+    }
+    if (hit.storeUrl && (!draft.storeUrl || /browse\?q=/.test(draft.storeUrl))) draft.storeUrl = hit.storeUrl;
+    if (!draft.namespace && (hit.epicNamespace || hit.namespace)) {
+      draft.namespace = hit.epicNamespace || hit.namespace;
+    }
+  }
 }
 
 function assignIds(drafts, idMap) {
@@ -609,7 +667,8 @@ function assignIds(drafts, idMap) {
 
 async function fetchEpicOwned(config) {
   const paths = config?.paths || {};
-  const idMap = paths.epicLibrary ? await loadIdMap(paths) : { byCatalog: new Map(), used: new Set() };
+  const stored = paths.epicLibrary ? await readJson(paths.epicLibrary, { games: [] }) : { games: [] };
+  const idMap = idMapFromStored(stored);
   const drafts = new Map();
   const add = (draft) => {
     if (!draft?.catalogItemId) return;
@@ -642,6 +701,7 @@ async function fetchEpicOwned(config) {
       } catch {
         // library-service já cobre a conta; assets é reforço
       }
+      applyStoredDraftMeta(drafts, stored.games);
       const enriched = await enrichDrafts([...drafts.values()], token);
       drafts.clear();
       for (const row of enriched) add(row);
@@ -649,6 +709,7 @@ async function fetchEpicOwned(config) {
       error = err.message || String(err);
     }
   }
+  applyStoredDraftMeta(drafts, stored.games);
 
   const games = assignIds(
     [...drafts.values()].filter((draft) => isRealEpicTitle(draft.name)),
@@ -700,6 +761,7 @@ module.exports = {
   readInstalledEpicGames,
   parseEpicRedirectBody,
   parseEpicRedirectPayload,
+  shrinkEpicCoverUrl,
   exchangeSidForCode,
   probeEglSession,
   importEglSession,

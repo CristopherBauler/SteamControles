@@ -700,6 +700,8 @@ h2 { margin: 18px 20px 8px; font-size: 15px; }
   touch-action: none;
   user-select: none;
   -webkit-user-drag: none;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
 }
 .lib-card a,
 .lib-card img {
@@ -793,6 +795,7 @@ h2 { margin: 18px 20px 8px; font-size: 15px; }
   border-color: var(--border);
   color: #8b95a7;
   cursor: default;
+  contain-intrinsic-size: auto 100px;
 }
 .lib-skipped .lib-card > input { align-self: center; }
 .lib-skipped .lib-card .lib-link {
